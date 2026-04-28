@@ -40,6 +40,8 @@ tests/data/sentinel_r0.nc
 /data/**/*.tiff
 /data/**/*.mat
 /data/**/*.log
+!/data/viirs/lut/
+!/data/viirs/lut/*.mat
 
 # Generated workflow outputs
 /outputs/
