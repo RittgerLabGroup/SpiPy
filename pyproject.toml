@@ -36,6 +36,8 @@ dependencies = [
     "scipy",
     "xarray",
     "netCDF4",
+    "pyproj",
+    "rioxarray",
 ]
 dynamic = ["version"]  # This tells the backend to get version from setuptools_scm
 

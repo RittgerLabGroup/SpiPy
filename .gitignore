@@ -29,3 +29,21 @@ __pycache__/
 tests/data/LUT_MODIS.mat
 tests/data/sentinel_r.nc
 tests/data/sentinel_r0.nc
+
+# Local input data and staged ancillary products
+/data/**/*.zarr/
+/data/**/*.nc
+/data/**/*.h5
+/data/**/*.hdf
+/data/**/*.hdf5
+/data/**/*.tif
+/data/**/*.tiff
+/data/**/*.mat
+/data/**/*.log
+
+# Generated workflow outputs
+/outputs/
+/examples/outputs/
+
+# Local ad hoc LUT drops; curated test data should be tracked explicitly
+/tests/data/*.mat

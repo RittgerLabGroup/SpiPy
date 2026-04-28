@@ -1,4 +1,4 @@
-"""Reader and scene-prep helpers for VIIRS VNP09GA / VJ109GA products."""
+"""Reader and scene-prep helpers for VIIRS VNP09GA / VJ109GA / VJ209GA products."""
 
 from __future__ import annotations
 
@@ -25,27 +25,31 @@ from spires.sensors.viirs.bands import (
     reflectance_field_name,
     resolve_viirs_inversion_bands_with_source,
 )
+from spires.sensors.viirs.geospatial import attach_spatial_ref, copy_spatial_metadata, parse_viirs_grid_metadata
 from spires.sensors.viirs.qa import decode_viirs_qa_masks, load_external_cloud_masks
 
 
 VIIRS_FILENAME_RE = re.compile(
-    r"^(?P<product>VNP09GA|VJ109GA)\.A(?P<year>\d{4})(?P<doy>\d{3})\."
+    r"^(?P<product>VNP09GA|VJ109GA|VJ209GA)\.A(?P<year>\d{4})(?P<doy>\d{3})\."
     r"(?P<tile>h\d{2}v\d{2})\.(?P<collection>\d{3})\.(?P<processing>\d+)\.h5$"
 )
 
 VIIRS_1KM_GRID = "HDFEOS/GRIDS/VIIRS_Grid_1km_2D"
 VIIRS_500M_GRID = "HDFEOS/GRIDS/VIIRS_Grid_500m_2D"
+VIIRS_1KM_GRID_NAME = "VIIRS_Grid_1km_2D"
+VIIRS_500M_GRID_NAME = "VIIRS_Grid_500m_2D"
 
 PLATFORM_BY_PRODUCT = {
     "VNP09GA": "snpp",
     "VJ109GA": "noaa20",
+    "VJ209GA": "noaa21",
 }
 
 LOGGER = logging.getLogger(__name__)
 
 
 def parse_viirs_surface_reflectance_filename(path: str | Path) -> SceneMetadata:
-    """Parse standard VNP09GA / VJ109GA filenames into normalized metadata."""
+    """Parse standard VNP09GA / VJ109GA / VJ209GA filenames into normalized metadata."""
     path = normalize_path(path)
     match = VIIRS_FILENAME_RE.match(path.name)
     if match is None:
@@ -130,7 +134,7 @@ def open_viirs_surface_reflectance(
     logger: logging.Logger | None = None,
 ) -> xr.Dataset:
     """
-    Open a single VIIRS VNP09GA or VJ109GA file as a normalized xarray dataset.
+    Open a single VIIRS VNP09GA, VJ109GA, or VJ209GA file as a normalized xarray dataset.
 
     The first version intentionally preserves the native split-grid structure:
     - 1 km moderate-band reflectance, geometry, and QA layers
@@ -139,7 +143,7 @@ def open_viirs_surface_reflectance(
     Parameters
     ----------
     path
-        VIIRS `VNP09GA` or `VJ109GA` HDF path.
+        VIIRS `VNP09GA`, `VJ109GA`, or `VJ209GA` HDF path.
     bands
         Optional VIIRS band subset to read. If omitted, all available VIIRS
         reflectance bands are read unless ``lut_file`` is provided.
@@ -159,6 +163,8 @@ def open_viirs_surface_reflectance(
     selected_500m_bands, selected_1km_bands = partition_viirs_band_names(selected_bands)
 
     with h5py.File(path, "r") as hdf:
+        grid_metadata_1km = parse_viirs_grid_metadata(hdf, VIIRS_1KM_GRID_NAME)
+        grid_metadata_500m = parse_viirs_grid_metadata(hdf, VIIRS_500M_GRID_NAME)
         x_1km = np.array(hdf[_coord_path(VIIRS_1KM_GRID, "XDim")][...])
         y_1km = np.array(hdf[_coord_path(VIIRS_1KM_GRID, "YDim")][...])
         x_500m = np.array(hdf[_coord_path(VIIRS_500M_GRID, "XDim")][...])
@@ -247,10 +253,22 @@ def open_viirs_surface_reflectance(
         ds["y_1km"].attrs.update(collect_attrs(hdf[_coord_path(VIIRS_1KM_GRID, "YDim")]))
         ds["x_500m"].attrs.update(collect_attrs(hdf[_coord_path(VIIRS_500M_GRID, "XDim")]))
         ds["y_500m"].attrs.update(collect_attrs(hdf[_coord_path(VIIRS_500M_GRID, "YDim")]))
+        if grid_metadata_1km is not None:
+            ds["reflectance_1km"].attrs.update(grid_metadata_1km.to_attrs())
+        if grid_metadata_500m is not None:
+            ds["reflectance_500m"].attrs.update(grid_metadata_500m.to_attrs())
         ds.attrs["selected_bands"] = selected_bands
         ds.attrs["band_selection_source"] = band_selection_source
         if lut_file is not None:
             ds.attrs["lut_file"] = str(lut_file)
+
+        ds = attach_spatial_ref(
+            ds,
+            x_dim="x_500m",
+            y_dim="y_500m",
+            grid_metadata=grid_metadata_500m,
+            data_var_names=("reflectance_500m",),
+        )
 
     log_event(
         logger,
@@ -325,6 +343,7 @@ def _build_component_masks(
     max_solar_zenith: float,
     min_obs_1km: int,
     min_obs_500m: int,
+    cloud_mask_policy: str,
 ) -> xr.Dataset:
     """Build transparent component masks and final valid masks on the 500 m grid."""
     finite_reflectance = np.isfinite(reflectance)
@@ -351,13 +370,31 @@ def _build_component_masks(
         | (num_observations_500m < min_obs_500m)
     )
 
+    if cloud_mask_policy == "strict":
+        mask_cloud_for_inversion = mask_cloud
+        mask_cloud_shadow_for_inversion = mask_cloud_shadow
+    elif cloud_mask_policy == "snow_wins":
+        mask_cloud_for_inversion = mask_cloud & (~mask_snow)
+        mask_cloud_shadow_for_inversion = mask_cloud_shadow & (~mask_snow)
+    elif cloud_mask_policy == "ignore_cloud":
+        mask_cloud_for_inversion = false_mask.copy()
+        mask_cloud_shadow_for_inversion = mask_cloud_shadow
+    elif cloud_mask_policy == "ignore_cloud_and_shadow":
+        mask_cloud_for_inversion = false_mask.copy()
+        mask_cloud_shadow_for_inversion = false_mask.copy()
+    else:
+        raise ValueError(
+            "cloud_mask_policy must be one of "
+            "'strict', 'snow_wins', 'ignore_cloud', or 'ignore_cloud_and_shadow'"
+        )
+
     valid_inversion_mask = ~(
         mask_invalid_reflectance
         | mask_bad_geometry
         | mask_water
         | mask_low_observation_support
-        | mask_cloud
-        | mask_cloud_shadow
+        | mask_cloud_for_inversion
+        | mask_cloud_shadow_for_inversion
     )
     valid_r0_mask = valid_inversion_mask & (~mask_snow)
 
@@ -370,6 +407,8 @@ def _build_component_masks(
             "mask_cloud": mask_cloud.astype(bool),
             "mask_cloud_shadow": mask_cloud_shadow.astype(bool),
             "mask_snow": mask_snow.astype(bool),
+            "mask_cloud_for_inversion": mask_cloud_for_inversion.astype(bool),
+            "mask_cloud_shadow_for_inversion": mask_cloud_shadow_for_inversion.astype(bool),
             "valid_inversion_mask": valid_inversion_mask.astype(bool),
             "valid_r0_mask": valid_r0_mask.astype(bool),
         }
@@ -391,6 +430,7 @@ def prepare_viirs_scene_for_inversion(
     min_obs_1km: int = 1,
     min_obs_500m: int = 1,
     water_mask_values: tuple[int, ...] = (0,),
+    cloud_mask_policy: str = "strict",
 ) -> xr.Dataset:
     """
     Prepare a VIIRS scene on a single 500 m analysis grid for downstream inversion.
@@ -430,6 +470,11 @@ def prepare_viirs_scene_for_inversion(
         Minimum 500 m observation support threshold.
     water_mask_values
         Values in ``land_water_mask`` that should be excluded as water.
+    cloud_mask_policy
+        Cloud masking policy for ``valid_inversion_mask``. ``"strict"`` applies
+        cloud and cloud-shadow masks. ``"snow_wins"`` ignores cloud and shadow
+        where VIIRS QA also flags snow. ``"ignore_cloud"`` ignores cloud but
+        keeps cloud-shadow masking. ``"ignore_cloud_and_shadow"`` ignores both.
     """
     start_time = perf_counter()
     logger = logger or LOGGER
@@ -537,13 +582,24 @@ def prepare_viirs_scene_for_inversion(
         max_solar_zenith=max_solar_zenith,
         min_obs_1km=min_obs_1km,
         min_obs_500m=min_obs_500m,
+        cloud_mask_policy=cloud_mask_policy,
     )
     prepared.update(mask_ds)
+    prepared.attrs["cloud_mask_policy"] = cloud_mask_policy
 
     prepared["reflectance"].attrs["selected_bands"] = bands
     prepared["reflectance"].attrs["band_selection_source"] = band_selection_source
     if lut_file is not None:
         prepared["reflectance"].attrs["lut_file"] = str(lut_file)
+
+    prepared = copy_spatial_metadata(raw, prepared)
+    prepared = attach_spatial_ref(
+        prepared,
+        x_dim="x",
+        y_dim="y",
+        grid_metadata=None,
+        data_var_names=tuple(name for name in prepared.data_vars if name != "spatial_ref"),
+    )
 
     log_event(
         logger,
@@ -553,6 +609,7 @@ def prepare_viirs_scene_for_inversion(
         lut_file=str(lut_file) if lut_file is not None else None,
         selected_bands=bands,
         band_selection_source=band_selection_source,
+        cloud_mask_policy=cloud_mask_policy,
         cloud_mask_source=str(cloud_mask_source) if isinstance(cloud_mask_source, (str, Path)) else type(cloud_mask_source).__name__ if cloud_mask_source is not None else None,
         keep_intermediate_reflectance=keep_intermediate_reflectance,
         output_shape=list(prepared["reflectance"].shape),

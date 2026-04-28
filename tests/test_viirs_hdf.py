@@ -17,6 +17,41 @@ from spires.sensors.viirs.hdf import VIIRS_1KM_GRID, VIIRS_500M_GRID
 
 def write_mock_viirs_hdf(path: Path) -> None:
     with h5py.File(path, "w") as hdf:
+        info = hdf.create_group("HDFEOS INFORMATION")
+        info.create_dataset(
+            "StructMetadata.0",
+            data=np.bytes_(
+                """
+GROUP=SwathStructure
+END_GROUP=SwathStructure
+GROUP=GridStructure
+	GROUP=GRID_1
+		GridName="VIIRS_Grid_1km_2D"
+		XDim=1
+		YDim=1
+		UpperLeftPointMtrs=(0,1)
+		LowerRightMtrs=(1,0)
+		Projection=HE5_GCTP_SNSOID
+		ProjParams=(6371007.181000,0,0,0,0,0,0,0,0,0,0,0,0)
+		SphereCode=-1
+		GridOrigin=HE5_HDFE_GD_UL
+	END_GROUP=GRID_1
+	GROUP=GRID_2
+		GridName="VIIRS_Grid_500m_2D"
+		XDim=2
+		YDim=2
+		UpperLeftPointMtrs=(0,1)
+		LowerRightMtrs=(1,0)
+		Projection=HE5_GCTP_SNSOID
+		ProjParams=(6371007.181000,0,0,0,0,0,0,0,0,0,0,0,0)
+		SphereCode=-1
+		GridOrigin=HE5_HDFE_GD_UL
+	END_GROUP=GRID_2
+END_GROUP=GridStructure
+END
+""".strip()
+            ),
+        )
         grid_1km = hdf.create_group(VIIRS_1KM_GRID)
         grid_500m = hdf.create_group(VIIRS_500M_GRID)
         data_fields_1km = grid_1km.create_group("Data Fields")
@@ -133,6 +168,15 @@ def test_parse_viirs_surface_reflectance_filename_vj1():
     assert scene.collection == "002"
 
 
+def test_parse_viirs_surface_reflectance_filename_vj2():
+    scene = parse_viirs_surface_reflectance_filename("VJ209GA.A2026112.h08v05.002.2026113072313.h5")
+    assert scene.product == "VJ209GA"
+    assert scene.platform == "noaa21"
+    assert scene.tile == "h08v05"
+    assert scene.acquisition_date == "2026-04-22"
+    assert scene.collection == "002"
+
+
 def test_infer_viirs_lut_band_names_from_path():
     bands = infer_viirs_lut_band_names_from_path(
         "SpiPy/tests/data/lut_viirs_noaa20_i1_i2_i3_m2_m4_m8_m11_3um_dust_bandpass.mat"
@@ -209,6 +253,32 @@ def test_prepare_viirs_scene_for_inversion_can_keep_intermediate_reflectance():
     assert "reflectance_1km_on_500m" in ds.data_vars
 
 
+def test_prepare_viirs_scene_for_inversion_can_ignore_cloud_mask_for_inversion():
+    raw = build_mock_viirs_raw_dataset()
+    cloud_mask = xr.DataArray(
+        np.ones((2, 2), dtype=bool),
+        dims=("y", "x"),
+        coords={"y": raw["y_500m"].values, "x": raw["x_500m"].values},
+    )
+
+    strict = prepare_viirs_scene_for_inversion(
+        raw,
+        cloud_mask_source=cloud_mask,
+        cloud_mask_policy="strict",
+    )
+    relaxed = prepare_viirs_scene_for_inversion(
+        raw,
+        cloud_mask_source=cloud_mask,
+        cloud_mask_policy="ignore_cloud",
+    )
+
+    assert not bool(strict["valid_inversion_mask"].any())
+    assert bool(relaxed["mask_cloud"].all())
+    assert not bool(relaxed["mask_cloud_for_inversion"].any())
+    assert bool(relaxed["valid_inversion_mask"].all())
+    assert relaxed.attrs["cloud_mask_policy"] == "ignore_cloud"
+
+
 def test_open_viirs_surface_reflectance_reads_only_requested_lut_bands(tmp_path):
     path = tmp_path / "VJ109GA.A2026112.h08v05.002.2026113072313.h5"
     write_mock_viirs_hdf(path)
@@ -224,6 +294,29 @@ def test_open_viirs_surface_reflectance_reads_only_requested_lut_bands(tmp_path)
     assert ds["reflectance_500m"].shape == (2, 2, 3)
     assert ds.attrs["selected_bands"] == ["I1", "I2", "I3", "M2", "M4", "M8", "M11"]
     assert ds.attrs["band_selection_source"] in {"metadata", "filename"}
+    assert "spatial_ref" in ds
+    assert ds["reflectance_500m"].attrs["grid_mapping"] == "spatial_ref"
+    assert ds["spatial_ref"].attrs["grid_mapping_name"] == "sinusoidal"
+    np.testing.assert_allclose(
+        [float(value) for value in ds["spatial_ref"].attrs["GeoTransform"].split()],
+        [0.0, 0.5, 0.0, 1.0, 0.0, -0.5],
+    )
+
+
+def test_prepare_viirs_scene_for_inversion_preserves_spatial_ref(tmp_path):
+    path = tmp_path / "VJ109GA.A2026112.h08v05.002.2026113072313.h5"
+    write_mock_viirs_hdf(path)
+
+    ds = prepare_viirs_scene_for_inversion(
+        path,
+        lut_file="SpiPy/tests/data/lut_viirs_noaa20_i1_i2_i3_m2_m4_m8_m11_3um_dust_bandpass.mat",
+    )
+
+    assert "spatial_ref" in ds
+    assert ds["reflectance"].attrs["grid_mapping"] == "spatial_ref"
+    assert ds["valid_inversion_mask"].attrs["grid_mapping"] == "spatial_ref"
+    assert ds["x"].attrs["standard_name"] == "projection_x_coordinate"
+    assert ds["y"].attrs["standard_name"] == "projection_y_coordinate"
 
 
 @pytest.mark.parametrize(
@@ -231,6 +324,7 @@ def test_open_viirs_surface_reflectance_reads_only_requested_lut_bands(tmp_path)
     [
         ("VNP09GA.A2026112.h08v05.002.2026113100255.h5", "snpp"),
         ("VJ109GA.A2026112.h08v05.002.2026113072313.h5", "noaa20"),
+        ("VJ209GA.A2026112.h08v05.002.2026113072313.h5", "noaa21"),
     ],
 )
 def test_open_viirs_surface_reflectance_download_example(filename, expected_platform):
@@ -252,6 +346,7 @@ def test_open_viirs_surface_reflectance_download_example(filename, expected_plat
     [
         "VNP09GA.A2026112.h08v05.002.2026113100255.h5",
         "VJ109GA.A2026112.h08v05.002.2026113072313.h5",
+        "VJ209GA.A2026112.h08v05.002.2026113072313.h5",
     ],
 )
 def test_prepare_viirs_scene_for_inversion_download_example(filename):

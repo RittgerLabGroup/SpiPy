@@ -184,7 +184,7 @@ def speedy_invert_array1d(spectra_targets, spectra_backgrounds, obs_solar_angles
     return results
 
 
-def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles, max_eval=100, x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
+def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles, spectrum_shade=None, max_eval=100, x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
                           bands=None, solar_angles=None, dust_concentrations=None, grain_sizes=None, reflectances=None, interpolator=None):
     """
     Batch inversion of snow reflectance spectra for 2D spatial arrays.
@@ -246,10 +246,8 @@ def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles
     may support spatially-varying shade spectra.
     """
     
-    spectrum_shade = np.zeros(spectra_targets.shape[-1], dtype=np.double)
-    
     if spectrum_shade is None:
-        spectrum_shade = np.zeros_like(spectra_targets[0])
+        spectrum_shade = np.zeros(spectra_targets.shape[-1], dtype=np.double)
 
     if interpolator is not None:
         bands = interpolator.bands

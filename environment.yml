@@ -25,6 +25,7 @@ dependencies:
   # Performance & processing
   - dask
   - zarr
+  - tqdm
 
   # Visualization
   - matplotlib
