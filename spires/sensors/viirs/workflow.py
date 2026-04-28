@@ -484,6 +484,12 @@ def run_viirs_inversion(
     max_eval: int = 100,
     x0: np.ndarray | None = None,
     algorithm: int = 2,
+    use_grouping: bool = False,
+    grouping_method: str = "chunk_bin_mean",
+    grouping_tolerance: float | np.ndarray = 0.02,
+    grouping_reflectance_tol: float | np.ndarray | None = None,
+    grouping_background_tol: float | np.ndarray | None = None,
+    grouping_solar_zenith_tol: float | np.ndarray | None = None,
     canopy_fraction=AUTO_CANOPY_FRACTION,
     ice_fraction=None,
     canopy_vertical_to_horizontal_crown_radius: float = 2.7,
@@ -533,6 +539,7 @@ def run_viirs_inversion(
     scene_reflectance = _chunk_if_possible(scene_ds["reflectance"], chunks)
     scene_solar_zenith = _chunk_if_possible(scene_ds["solar_zenith"], {k: v for k, v in chunks.items() if k != "band"})
     scene_valid_mask = _chunk_if_possible(scene_ds["valid_inversion_mask"], {k: v for k, v in chunks.items() if k != "band"})
+    inversion_valid_mask = scene_valid_mask if apply_valid_mask else None
     r0_reflectance = _chunk_if_possible(r0_ds["r0_reflectance"], {k: v for k, v in chunks.items() if k != "time"})
 
     log_event(
@@ -548,6 +555,12 @@ def run_viirs_inversion(
         apply_valid_inversion_mask=apply_valid_mask,
         mask_with_valid_inversion_mask=apply_valid_mask,
         execution_profile=profile.name if profile is not None else None,
+        use_grouping=use_grouping,
+        grouping_method=grouping_method if use_grouping else None,
+        grouping_tolerance=grouping_tolerance if use_grouping else None,
+        grouping_reflectance_tol=grouping_reflectance_tol if use_grouping else None,
+        grouping_background_tol=grouping_background_tol if use_grouping else None,
+        grouping_solar_zenith_tol=grouping_solar_zenith_tol if use_grouping else None,
     )
 
     results = speedy_invert_dask(
@@ -560,6 +573,13 @@ def run_viirs_inversion(
         algorithm=algorithm,
         client=client,
         scatter_lut=scatter_lut,
+        valid_mask=inversion_valid_mask,
+        use_grouping=use_grouping,
+        grouping_method=grouping_method,
+        grouping_tolerance=grouping_tolerance,
+        grouping_reflectance_tol=grouping_reflectance_tol,
+        grouping_background_tol=grouping_background_tol,
+        grouping_solar_zenith_tol=grouping_solar_zenith_tol,
     )
 
     if apply_valid_mask:
@@ -593,6 +613,12 @@ def run_viirs_inversion(
     results.attrs["canopy_vertical_to_horizontal_crown_radius"] = canopy_vertical_to_horizontal_crown_radius
     results.attrs["canopy_fraction_source"] = str(resolved_canopy_fraction) if resolved_canopy_fraction is not None else "none"
     results.attrs["ice_fraction_applied"] = ice_fraction is not None
+    results.attrs["grouping_enabled"] = bool(use_grouping)
+    results.attrs["grouping_method"] = grouping_method if use_grouping else "none"
+    results.attrs["grouping_tolerance"] = grouping_tolerance if use_grouping else None
+    results.attrs["grouping_reflectance_tol"] = grouping_reflectance_tol if use_grouping else None
+    results.attrs["grouping_background_tol"] = grouping_background_tol if use_grouping else None
+    results.attrs["grouping_solar_zenith_tol"] = grouping_solar_zenith_tol if use_grouping else None
     if profile is not None:
         results.attrs["execution_profile"] = profile.name
     results = copy_spatial_metadata(scene_ds, results)
@@ -611,6 +637,12 @@ def run_viirs_inversion(
         apply_valid_inversion_mask=apply_valid_mask,
         mask_with_valid_inversion_mask=apply_valid_mask,
         execution_profile=profile.name if profile is not None else None,
+        use_grouping=use_grouping,
+        grouping_method=grouping_method if use_grouping else None,
+        grouping_tolerance=grouping_tolerance if use_grouping else None,
+        grouping_reflectance_tol=grouping_reflectance_tol if use_grouping else None,
+        grouping_background_tol=grouping_background_tol if use_grouping else None,
+        grouping_solar_zenith_tol=grouping_solar_zenith_tol if use_grouping else None,
     )
 
     return results

@@ -95,6 +95,13 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         algorithm,
         client,
         scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
     ):
         captured["target_chunks"] = spectra_targets.chunks
         captured["background_chunks"] = spectra_backgrounds.chunks
@@ -102,6 +109,10 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         captured["scatter_lut"] = scatter_lut
         captured["algorithm"] = algorithm
         captured["x0"] = x0
+        captured["valid_mask_chunks"] = valid_mask.chunks
+        captured["use_grouping"] = use_grouping
+        captured["grouping_method"] = grouping_method
+        captured["grouping_tolerance"] = grouping_tolerance
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}
         fsca = xr.DataArray(np.full((2, 2), 0.75, dtype=np.float32), dims=dims, coords=coords)
@@ -123,13 +134,20 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         lut_file=TEST_LUT_FILE,
         execution_profile="local",
         algorithm=5,
+        use_grouping=True,
+        grouping_method="first",
+        grouping_tolerance=0.02,
     )
 
     assert captured["target_chunks"] is not None
     assert captured["background_chunks"] is not None
     assert captured["angle_chunks"] is not None
+    assert captured["valid_mask_chunks"] is not None
     assert captured["scatter_lut"] is False
     assert captured["algorithm"] == 5
+    assert captured["use_grouping"] is True
+    assert captured["grouping_method"] == "first"
+    assert captured["grouping_tolerance"] == pytest.approx(0.02)
     np.testing.assert_allclose(captured["x0"], np.array([0.5, 0.05, 10, 250], dtype=np.float64))
     assert np.isnan(result["fsca"].isel(y=0, x=1))
     assert result.attrs["lut_file"].endswith(".mat")
@@ -147,6 +165,7 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
 def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
     scene = build_mock_prepared_scene()
     r0 = build_mock_r0()
+    captured = {}
 
     def fake_speedy_invert_dask(
         *,
@@ -159,7 +178,15 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
         algorithm,
         client,
         scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
     ):
+        captured["valid_mask"] = valid_mask
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}
         fsca = xr.DataArray(np.full((2, 2), 0.75, dtype=np.float32), dims=dims, coords=coords)
@@ -183,6 +210,7 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
         apply_valid_inversion_mask=False,
     )
 
+    assert captured["valid_mask"] is None
     assert result["fsca"].isel(y=0, x=1).item() == pytest.approx(0.75)
     assert result["raw_viewable_snow_fraction"].isel(y=0, x=1).item() == pytest.approx(0.75)
     assert not bool(result["valid_inversion_mask"].isel(y=0, x=1))
@@ -217,6 +245,13 @@ def test_run_viirs_inversion_applies_canopy_and_ice_snow_fraction_adjustment(mon
         algorithm,
         client,
         scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}
@@ -294,6 +329,13 @@ def test_run_viirs_inversion_returns_netcdf_serializable_attrs(monkeypatch, tmp_
         algorithm,
         client,
         scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}
@@ -358,6 +400,13 @@ def test_run_viirs_inversion_accepts_noaa21_lut_platform(monkeypatch, tmp_path):
         algorithm,
         client,
         scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}

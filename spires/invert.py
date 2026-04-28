@@ -3,6 +3,8 @@ import spires.core
 import numpy as np
 import scipy
 
+from spires.speedy_utol import group_spectra_block, scatter_group_results_block
+
 
 def speedy_invert(spectrum_target, spectrum_background, solar_angle, spectrum_shade=None,
                   bands=None, solar_angles=None, dust_concentrations=None, grain_sizes=None, reflectances=None,
@@ -185,7 +187,9 @@ def speedy_invert_array1d(spectra_targets, spectra_backgrounds, obs_solar_angles
 
 
 def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles, spectrum_shade=None, max_eval=100, x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
-                          bands=None, solar_angles=None, dust_concentrations=None, grain_sizes=None, reflectances=None, interpolator=None):
+                          bands=None, solar_angles=None, dust_concentrations=None, grain_sizes=None, reflectances=None, interpolator=None,
+                          valid_mask=None, use_grouping=False, grouping_method="chunk_bin_mean", grouping_tolerance=0.02,
+                          grouping_reflectance_tol=None, grouping_background_tol=None, grouping_solar_zenith_tol=None):
     """
     Batch inversion of snow reflectance spectra for 2D spatial arrays.
 
@@ -255,6 +259,37 @@ def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles
         dust_concentrations = interpolator.dust_concentrations
         grain_sizes = interpolator.grain_sizes
         reflectances = interpolator.reflectances
+
+    if use_grouping:
+        grouped = group_spectra_block(
+            spectra_targets,
+            spectra_backgrounds,
+            obs_solar_angles,
+            valid_mask=valid_mask,
+            representative_method=grouping_method,
+            tolerance=grouping_tolerance,
+            reflectance_tol=grouping_reflectance_tol,
+            background_tol=grouping_background_tol,
+            solar_zenith_tol=grouping_solar_zenith_tol,
+        )
+        if grouped.n_groups == 0:
+            return np.full((spectra_targets.shape[0], spectra_targets.shape[1], 4), np.nan, dtype=np.double)
+
+        grouped_results = speedy_invert_array1d(
+            spectra_targets=grouped.representative_targets,
+            spectra_backgrounds=grouped.representative_backgrounds,
+            obs_solar_angles=grouped.representative_solar_zenith,
+            spectrum_shade=spectrum_shade,
+            bands=bands,
+            solar_angles=solar_angles,
+            dust_concentrations=dust_concentrations,
+            grain_sizes=grain_sizes,
+            reflectances=reflectances,
+            max_eval=max_eval,
+            x0=x0,
+            algorithm=algorithm,
+        )
+        return scatter_group_results_block(grouped, grouped_results, fill_value=np.nan)
 
     results = np.empty((spectra_targets.shape[0], spectra_targets.shape[1], 4), dtype=np.double)
 
@@ -361,7 +396,10 @@ def speedy_invert_xarray(spectra_targets, spectra_backgrounds, obs_solar_angles,
 def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
                        interpolator, spectrum_shade=None, max_eval=100,
                        x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
-                       client=None, scatter_lut=True):
+                       client=None, scatter_lut=True, valid_mask=None,
+                       use_grouping=False, grouping_method="chunk_bin_mean",
+                       grouping_tolerance=0.02, grouping_reflectance_tol=None,
+                       grouping_background_tol=None, grouping_solar_zenith_tol=None):
     """
     Parallel inversion of snow reflectance spectra using Dask and xarray.
 
@@ -493,6 +531,8 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
     # Handle spectrum_shade
     if spectrum_shade is None:
         spectrum_shade = np.zeros(len(interpolator.bands))
+    if valid_mask is None:
+        valid_mask = xarray.ones_like(obs_solar_angles, dtype=bool)
 
     # Scatter LUT to workers if requested and client exists
     if scatter_lut and client is not None:
@@ -511,7 +551,7 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         reflectances_scattered = interpolator.reflectances
 
     # Define the wrapper function for apply_ufunc
-    def _invert_wrapper(spectra_targets, spectra_backgrounds, obs_solar_angles,
+    def _invert_wrapper(spectra_targets, spectra_backgrounds, obs_solar_angles, valid_mask,
                        bands, solar_angles, dust, grain, reflectances):
         """Internal wrapper for speedy_invert_array2d."""
         # Handle potential time dimension
@@ -532,7 +572,14 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
                     reflectances=reflectances,
                     max_eval=max_eval,
                     x0=x0,
-                    algorithm=algorithm
+                    algorithm=algorithm,
+                    valid_mask=None if valid_mask is None else valid_mask[t],
+                    use_grouping=use_grouping,
+                    grouping_method=grouping_method,
+                    grouping_tolerance=grouping_tolerance,
+                    grouping_reflectance_tol=grouping_reflectance_tol,
+                    grouping_background_tol=grouping_background_tol,
+                    grouping_solar_zenith_tol=grouping_solar_zenith_tol,
                 )
         else:  # No time dimension
             results = speedy_invert_array2d(
@@ -547,7 +594,14 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
                 reflectances=reflectances,
                 max_eval=max_eval,
                 x0=x0,
-                algorithm=algorithm
+                algorithm=algorithm,
+                valid_mask=valid_mask,
+                use_grouping=use_grouping,
+                grouping_method=grouping_method,
+                grouping_tolerance=grouping_tolerance,
+                grouping_reflectance_tol=grouping_reflectance_tol,
+                grouping_background_tol=grouping_background_tol,
+                grouping_solar_zenith_tol=grouping_solar_zenith_tol,
             )
         return results
 
@@ -573,6 +627,7 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         spectra_targets,
         spectra_backgrounds,
         obs_solar_angles,
+        valid_mask,
         interpolator.bands,
         interpolator.solar_angles,
         interpolator.dust_concentrations,
@@ -583,6 +638,7 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
             target_core_dims,      # spectra_targets
             background_core_dims,  # spectra_backgrounds
             angle_core_dims,       # obs_solar_angles
+            angle_core_dims,       # valid_mask
             ['bands'],             # bands
             ['sz'],                # solar_angles
             ['dust'],              # dust_concentrations
@@ -628,6 +684,15 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         'units': 'μm',
         'valid_range': [10, 2000]
     }
+
+    results.attrs.update({
+        'grouping_enabled': bool(use_grouping),
+        'grouping_method': grouping_method if use_grouping else 'none',
+        'grouping_tolerance': grouping_tolerance,
+        'grouping_reflectance_tol': grouping_reflectance_tol,
+        'grouping_background_tol': grouping_background_tol,
+        'grouping_solar_zenith_tol': grouping_solar_zenith_tol,
+    })
 
     return results
 
