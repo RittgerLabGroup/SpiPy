@@ -15,6 +15,15 @@ Historical implementation details from the large April 2026 refactor now live in
 
 - `notes_rtp_archive_2026-04.md`
 
+## Environment Notes
+
+- in sandboxed terminal sessions, prefer `mamba` over `conda`
+- active environment: `spipy14`
+- use a writable cache pattern for sandboxed `mamba` or notebook runs:
+  - `XDG_CACHE_HOME=/tmp/mamba-cache`
+- example command:
+  - `XDG_CACHE_HOME=/tmp/mamba-cache mamba run -n spipy14 python -m pytest SpiPy/tests/test_viirs_r0.py`
+
 ## Current Architecture
 
 ### Shared sensor-agnostic layer
@@ -32,16 +41,16 @@ Historical implementation details from the large April 2026 refactor now live in
 - `spires/sensors/full_workflow.py`
   - shared inversion workflow core after prepared `R` and `R0` are available
 - `spires/sensors/r0_core.py`
-  - shared `R0` compositing and timeseries machinery
+  - shared `R0` source-stack, optional Zarr-backed staging, and compositing machinery
 - `spires/sensors/io.py`
   - generic safe dataset load / validate / atomic write helpers
 
 ### Sensor-specific layer
 
 - `spires/sensors/viirs/`
-  - reader, QA, bands, geospatial, ancillary, thin workflow / `R0` wrappers
+  - reader, QA, bands, geospatial, ancillary, thin workflow / shared-core `R0` wrappers
 - `spires/sensors/modis/`
-  - reader, QA, bands, geospatial, ancillary, thin workflow / `R0` wrappers
+  - reader, QA, bands, geospatial, ancillary, thin workflow / shared-core `R0` wrappers
 
 ### Current design rule
 
@@ -52,6 +61,7 @@ Once a prepared scene has canonical `reflectance`, geometry, masks, and `R0`, th
 
 1. Read raw sensor files and build a prepared scene on the analysis grid.
 2. Build or reuse a validated `R0` background dataset.
+   Use the unified `spires.sensors.build_r0_from_sources(...)` API for both MODIS and VIIRS; pass `zarr_path` and time-major chunks for memory-safe local builds.
 3. Run the shared inversion workflow with sensor-specific wrappers only where band / LUT logic differs.
 4. Write outputs through the shared safe I/O layer.
 

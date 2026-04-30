@@ -16,8 +16,8 @@ from spires.sensors.viirs.hdf import (
 )
 from spires.sensors.viirs.qa import decode_viirs_qa_masks, load_external_cloud_masks
 from spires.sensors.viirs.r0 import (
+    build_r0_from_sources,
     build_viirs_r0,
-    build_viirs_r0_from_sources,
     build_viirs_r0_candidate_metrics,
     build_viirs_timeseries,
     compute_viirs_r0_indices,
@@ -30,8 +30,8 @@ from spires.sensors.viirs.workflow import (
 )
 
 __all__ = [
+    "build_r0_from_sources",
     "build_viirs_r0",
-    "build_viirs_r0_from_sources",
     "build_viirs_r0_candidate_metrics",
     "build_viirs_timeseries",
     "compute_viirs_r0_indices",

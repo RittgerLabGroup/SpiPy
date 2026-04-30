@@ -3,9 +3,9 @@ import pytest
 import xarray as xr
 
 from spires.logging_utils import configure_spires_file_logger
+from spires.sensors import build_r0_from_sources as build_sensor_r0_from_sources
 from spires.sensors.viirs.r0 import (
     build_viirs_r0,
-    build_viirs_r0_from_sources,
     build_viirs_r0_candidate_metrics,
     build_viirs_timeseries,
     compute_viirs_r0_indices,
@@ -183,7 +183,7 @@ def test_build_viirs_timeseries_can_write_reduced_stack_to_zarr(tmp_path):
     assert timeseries.sizes["time"] == 2
 
 
-def test_build_viirs_r0_from_sources_matches_timeseries_builder():
+def test_unified_viirs_r0_from_sources_matches_timeseries_builder():
     scene_1 = build_mock_prepared_scene(
         "2026-06-01",
         np.array(
@@ -206,25 +206,25 @@ def test_build_viirs_r0_from_sources_matches_timeseries_builder():
     )
 
     from_timeseries = build_viirs_r0(build_viirs_timeseries([scene_1, scene_2]))
-    incremental = build_viirs_r0_from_sources([scene_1, scene_2])
+    from_sources = build_sensor_r0_from_sources([scene_1, scene_2], sensor="viirs", platform="snpp")
 
-    np.testing.assert_allclose(from_timeseries["r0_reflectance"].values, incremental["r0_reflectance"].values)
-    np.testing.assert_array_equal(from_timeseries["r0_source_index"].values, incremental["r0_source_index"].values)
+    np.testing.assert_allclose(from_timeseries["r0_reflectance"].values, from_sources["r0_reflectance"].values)
+    np.testing.assert_array_equal(from_timeseries["r0_source_index"].values, from_sources["r0_source_index"].values)
     np.testing.assert_array_equal(
         from_timeseries["r0_used_min_blue_rule"].values,
-        incremental["r0_used_min_blue_rule"].values,
+        from_sources["r0_used_min_blue_rule"].values,
     )
 
 
-def test_build_viirs_r0_from_sources_loads_existing_file_and_logs_path(tmp_path):
+def test_unified_viirs_r0_from_sources_loads_existing_file_and_logs_path(tmp_path):
     log_path = tmp_path / "viirs_r0.log"
     logger = configure_spires_file_logger(log_path, logger_name="spires.test.viirs.r0.reuse", log_to_stdout=False)
     r0_path = tmp_path / "existing_r0.nc"
 
     scene = build_mock_prepared_scene("2026-06-01", np.full((2, 7), 0.2, dtype=np.float32))
-    original = build_viirs_r0_from_sources([scene], r0_path=r0_path, logger=logger)
+    original = build_sensor_r0_from_sources([scene], sensor="viirs", platform="snpp", r0_path=r0_path, logger=logger)
 
-    loaded = build_viirs_r0_from_sources([], r0_path=r0_path, logger=logger)
+    loaded = build_sensor_r0_from_sources([], sensor="viirs", platform="snpp", r0_path=r0_path, logger=logger)
 
     assert r0_path.exists()
     np.testing.assert_allclose(original["r0_reflectance"].values, loaded["r0_reflectance"].values)
