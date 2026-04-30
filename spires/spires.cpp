@@ -434,7 +434,7 @@ double constraint(const std::vector<double> &x, std::vector<double> &grad, void 
 
 
 double spectrum_has_nan(double* spectrum_target, int len_target) {
-    for (int n = 0; n <= len_target; n++) {
+    for (int n = 0; n < len_target; n++) {
         if (std::isnan(spectrum_target[n])) {
             return true;
         }

@@ -43,7 +43,11 @@ def _decode_attr(value: Any) -> Any:
 
 def collect_attrs(dataset: Any) -> dict[str, Any]:
     """Return dataset attributes as a plain dictionary."""
-    return {key: _decode_attr(value) for key, value in dataset.attrs.items()}
+    if hasattr(dataset, "attrs"):
+        return {key: _decode_attr(value) for key, value in dataset.attrs.items()}
+    if hasattr(dataset, "ncattrs"):
+        return {key: _decode_attr(dataset.getncattr(key)) for key in dataset.ncattrs()}
+    return {}
 
 
 def read_scaled_array(
@@ -98,4 +102,3 @@ def read_scaled_array(
 def normalize_path(path: str | Path) -> Path:
     """Return an expanded, absolute path."""
     return Path(path).expanduser().resolve()
-

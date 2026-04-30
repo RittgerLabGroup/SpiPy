@@ -40,6 +40,10 @@ tests/data/sentinel_r0.nc
 /data/**/*.tiff
 /data/**/*.mat
 /data/**/*.log
+/data/modis/**
+!/data/modis/lut/
+/data/modis/lut/**
+!/data/modis/lut/*.mat
 !/data/viirs/lut/
 !/data/viirs/lut/*.mat
 

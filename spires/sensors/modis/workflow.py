@@ -1,4 +1,4 @@
-"""High-level VIIRS inversion workflow helpers."""
+"""High-level MODIS inversion workflow helpers."""
 
 from __future__ import annotations
 
@@ -14,50 +14,39 @@ from spires.sensors.full_workflow import (
     run_sensor_inversion,
 )
 from spires.sensors.io import sanitize_netcdf_dataset
-from spires.sensors.viirs.bands import (
-    infer_viirs_lut_band_names_from_metadata,
-    infer_viirs_lut_band_names_from_path,
-    normalize_viirs_band_names,
-    resolve_viirs_inversion_bands,
+from spires.sensors.modis.bands import (
+    infer_modis_lut_band_names_from_metadata,
+    infer_modis_lut_band_names_from_path,
+    normalize_modis_band_names,
+    resolve_modis_inversion_bands,
 )
-from spires.sensors.viirs.geospatial import copy_spatial_metadata
-from spires.sensors.viirs.hdf import prepare_viirs_scene_for_inversion
+from spires.sensors.modis.geospatial import copy_spatial_metadata
+from spires.sensors.modis.hdf import prepare_modis_scene_for_inversion
 
 
 LOGGER = logging.getLogger(__name__)
-ViirsExecutionProfile = SensorExecutionProfile
+ModisExecutionProfile = SensorExecutionProfile
 _sanitize_netcdf_attrs = sanitize_netcdf_dataset
 
 
-def get_viirs_execution_profile(name: str) -> ViirsExecutionProfile:
-    """Return a named VIIRS execution profile."""
+def get_modis_execution_profile(name: str) -> ModisExecutionProfile:
+    """Return a named MODIS execution profile."""
     try:
         return get_default_execution_profile(name)
     except ValueError as exc:
-        raise ValueError(f"Unknown VIIRS execution profile: {name!r}") from exc
-
-
-def _infer_lut_platform(lut_file: str | Path) -> str | None:
-    stem = Path(lut_file).stem.lower()
-    if "noaa21" in stem:
-        return "noaa21"
-    if "noaa20" in stem:
-        return "noaa20"
-    if "snpp" in stem:
-        return "snpp"
-    return None
+        raise ValueError(f"Unknown MODIS execution profile: {name!r}") from exc
 
 
 def _resolve_lut_band_names(lut_file: str | Path) -> list[str]:
-    lut_bands = infer_viirs_lut_band_names_from_metadata(lut_file)
+    lut_bands = infer_modis_lut_band_names_from_metadata(lut_file)
     if lut_bands is None:
-        lut_bands = infer_viirs_lut_band_names_from_path(lut_file)
+        lut_bands = infer_modis_lut_band_names_from_path(lut_file)
     if lut_bands is None:
-        lut_bands = resolve_viirs_inversion_bands(lut_file=lut_file)
-    return normalize_viirs_band_names(lut_bands)
+        lut_bands = resolve_modis_inversion_bands(lut_file=lut_file)
+    return normalize_modis_band_names(lut_bands)
 
 
-def run_viirs_inversion(
+def run_modis_inversion(
     scene,
     r0,
     *,
@@ -80,12 +69,12 @@ def run_viirs_inversion(
     canopy_fraction=AUTO_CANOPY_FRACTION,
     ice_fraction=None,
     canopy_vertical_to_horizontal_crown_radius: float = 2.7,
-    execution_profile: str | ViirsExecutionProfile | None = None,
+    execution_profile: str | ModisExecutionProfile | None = None,
     logger: logging.Logger | None = None,
     **prepare_kwargs,
 ) -> xr.Dataset:
     """
-    Run SPIRES inversion for a VIIRS scene using a prepared or on-disk R0 background.
+    Run SPIRES inversion for a MODIS scene using a prepared or on-disk R0 background.
 
     Set ``apply_valid_inversion_mask=False`` to keep the generated
     ``valid_inversion_mask`` in the output while leaving inversion result
@@ -95,15 +84,14 @@ def run_viirs_inversion(
     return run_sensor_inversion(
         scene,
         r0,
-        sensor_name="viirs",
-        sensor_display_name="VIIRS",
-        event_name="run_viirs_inversion",
+        sensor_name="modis",
+        sensor_display_name="MODIS",
+        event_name="run_modis_inversion",
         lut_file=lut_file,
-        prepare_scene_fn=prepare_viirs_scene_for_inversion,
-        normalize_band_names_fn=normalize_viirs_band_names,
+        prepare_scene_fn=prepare_modis_scene_for_inversion,
+        normalize_band_names_fn=normalize_modis_band_names,
         resolve_lut_band_names_fn=_resolve_lut_band_names,
         copy_spatial_metadata_fn=copy_spatial_metadata,
-        infer_lut_platform_fn=_infer_lut_platform,
         client=client,
         bands=bands,
         apply_valid_inversion_mask=apply_valid_inversion_mask,

@@ -9,6 +9,19 @@ import numpy as np
 import xarray as xr
 
 from spires.logging_utils import log_event
+from spires.sensors.r0_core import (
+    build_r0 as build_shared_r0,
+    build_r0_candidate_metrics as build_shared_r0_candidate_metrics,
+    build_timeseries as build_shared_timeseries,
+    compute_r0_indices as compute_shared_r0_indices,
+    gather_spectra_by_index,
+    infer_source_date_bounds,
+    load_existing_r0_if_valid,
+    reduce_prepared_scene_for_r0 as reduce_shared_prepared_scene_for_r0,
+    scalar_dataarray_to_float,
+    select_time_indices,
+    write_r0_dataset_atomically,
+)
 from spires.sensors.viirs.geospatial import copy_spatial_metadata
 from spires.sensors.viirs.hdf import parse_viirs_surface_reflectance_filename, prepare_viirs_scene_for_inversion
 
@@ -26,67 +39,14 @@ VIIRS_R0_STAGING_VARIABLES = (
 LOGGER = logging.getLogger(__name__)
 
 
-def _infer_source_date_bounds(
-    sources: list[str | Path | xr.Dataset],
-) -> tuple[str | None, str | None]:
-    """Infer requested date bounds from source paths or dataset metadata when possible."""
-    dates: list[np.datetime64] = []
-
-    for source in sources:
-        acquisition_date: str | None = None
-
-        if isinstance(source, xr.Dataset):
-            if "time" in source.coords and source["time"].size:
-                time_values = source["time"].values
-                dates.append(np.datetime64(time_values.min()))
-                dates.append(np.datetime64(time_values.max()))
-                continue
-
-            acquisition_date = source.attrs.get("acquisition_date")
-            if acquisition_date is None:
-                source_path = source.attrs.get("source_path")
-                if source_path:
-                    try:
-                        acquisition_date = parse_viirs_surface_reflectance_filename(source_path).acquisition_date
-                    except ValueError:
-                        acquisition_date = None
-        else:
-            try:
-                acquisition_date = parse_viirs_surface_reflectance_filename(source).acquisition_date
-            except ValueError:
-                acquisition_date = None
-
-        if acquisition_date is not None:
-            dates.append(np.datetime64(acquisition_date))
-
-    if not dates:
-        return None, None
-
-    return str(min(dates))[:10], str(max(dates))[:10]
-
-
-def _safe_normalized_difference(numerator: xr.DataArray, denominator: xr.DataArray) -> xr.DataArray:
-    """Compute a normalized difference while masking zero denominators."""
-    total = numerator + denominator
-    return xr.where(total != 0, (numerator - denominator) / total, np.nan)
-
-
-def _scalar_dataarray_to_float(value: xr.DataArray) -> float:
-    """Convert a scalar DataArray to float, computing it first if needed."""
-    if hasattr(value.data, "compute"):
-        value = value.compute()
-    return float(value.item())
-
-
 def reduce_viirs_prepared_scene_for_r0(prepared_ds: xr.Dataset) -> xr.Dataset:
     """Keep only the variables required for VIIRS R0 screening and compositing."""
-    missing = [name for name in VIIRS_R0_STAGING_VARIABLES if name not in prepared_ds]
-    if missing:
-        raise ValueError(f"Prepared VIIRS scene is missing required R0 staging variables: {missing}")
-
-    reduced = prepared_ds[list(VIIRS_R0_STAGING_VARIABLES)].copy()
-    reduced.attrs = prepared_ds.attrs.copy()
-    return copy_spatial_metadata(prepared_ds, reduced)
+    return reduce_shared_prepared_scene_for_r0(
+        prepared_ds,
+        staging_variables=VIIRS_R0_STAGING_VARIABLES,
+        sensor_display_name="VIIRS",
+        copy_spatial_metadata_fn=copy_spatial_metadata,
+    )
 
 
 def compute_viirs_r0_indices(
@@ -100,46 +60,16 @@ def compute_viirs_r0_indices(
     blue_band: str = VIIRS_R0_BLUE_BAND,
     min_blue_reflectance: float = 0.10,
 ) -> xr.Dataset:
-    """
-    Compute the VIIRS indices used by the MODIS-inspired R0 compositing logic.
-
-    Policy follows the existing MATLAB `createR0.m` design:
-    - NDVI is masked by `valid_r0_mask`
-    - NDSI is not masked by cloud/snow, but is masked for high view angles
-    - the blue-band minimum uses `M2` as the MODIS band-3 substitute and
-      excludes values below `min_blue_reflectance`
-    """
-    reflectance = prepared_ds["reflectance"]
-    sensor_zenith = prepared_ds["sensor_zenith"]
-    valid_r0_mask = prepared_ds["valid_r0_mask"]
-
-    low_zenith = sensor_zenith <= max_sensor_zenith
-
-    red = reflectance.sel(band=ndvi_red_band)
-    nir = reflectance.sel(band=ndvi_nir_band)
-    visible = reflectance.sel(band=ndsi_visible_band)
-    swir = reflectance.sel(band=ndsi_swir_band)
-    blue = reflectance.sel(band=blue_band)
-
-    ndvi = _safe_normalized_difference(nir, red)
-    ndvi = ndvi.where(valid_r0_mask & low_zenith)
-    ndvi.name = "ndvi"
-
-    ndsi = _safe_normalized_difference(visible, swir)
-    ndsi = ndsi.where(low_zenith)
-    ndsi.name = "ndsi"
-
-    blue_metric = blue.where(blue >= min_blue_reflectance)
-    blue_metric = blue_metric.where(low_zenith)
-    blue_metric.name = "blue_metric"
-
-    return xr.Dataset(
-        data_vars={
-            "ndvi": ndvi,
-            "ndsi": ndsi,
-            "blue_metric": blue_metric,
-            "r0_low_sensor_zenith_mask": low_zenith.astype(bool),
-        }
+    """Compute the VIIRS screening indices used by the shared R0 compositing logic."""
+    return compute_shared_r0_indices(
+        prepared_ds,
+        max_sensor_zenith=max_sensor_zenith,
+        ndvi_red_band=ndvi_red_band,
+        ndvi_nir_band=ndvi_nir_band,
+        ndsi_visible_band=ndsi_visible_band,
+        ndsi_swir_band=ndsi_swir_band,
+        blue_band=blue_band,
+        min_blue_reflectance=min_blue_reflectance,
     )
 
 
@@ -154,15 +84,8 @@ def build_viirs_r0_candidate_metrics(
     blue_band: str = VIIRS_R0_BLUE_BAND,
     min_blue_reflectance: float = 0.10,
 ) -> xr.Dataset:
-    """
-    Build notebook-style screened candidate metrics for VIIRS R0 selection.
-
-    Screening policy:
-    - `candidate_ndvi`: observations that are valid for R0 and also have `ndsi < 0`
-    - `candidate_blue_metric`: observations that are valid for R0 and have
-      blue reflectance above the minimum threshold
-    """
-    indices_ds = compute_viirs_r0_indices(
+    """Build screened VIIRS candidate metrics for downstream R0 selection."""
+    return build_shared_r0_candidate_metrics(
         prepared_timeseries,
         max_sensor_zenith=max_sensor_zenith,
         ndvi_red_band=ndvi_red_band,
@@ -172,82 +95,6 @@ def build_viirs_r0_candidate_metrics(
         blue_band=blue_band,
         min_blue_reflectance=min_blue_reflectance,
     )
-
-    valid_r0_mask = prepared_timeseries["valid_r0_mask"]
-    ndsi = indices_ds["ndsi"]
-    ndvi = indices_ds["ndvi"]
-    blue_metric = indices_ds["blue_metric"]
-
-    has_negative_ndsi = (ndsi < 0).any(dim="time")
-    candidate_negative_ndsi_mask = valid_r0_mask & (ndsi < 0)
-    candidate_blue_mask = valid_r0_mask & blue_metric.notnull()
-
-    candidate_ndvi = ndvi.where(candidate_negative_ndsi_mask)
-    candidate_blue_metric = blue_metric.where(candidate_blue_mask)
-
-    return xr.Dataset(
-        data_vars={
-            **indices_ds.data_vars,
-            "candidate_ndvi": candidate_ndvi,
-            "candidate_blue_metric": candidate_blue_metric,
-            "candidate_negative_ndsi_mask": candidate_negative_ndsi_mask.astype(bool),
-            "candidate_blue_mask": candidate_blue_mask.astype(bool),
-            "has_negative_ndsi": has_negative_ndsi.astype(bool),
-        }
-    )
-
-
-def _gather_spectra_by_index(
-    reflectance: xr.DataArray,
-    source_index: xr.DataArray,
-    invalid_mask: xr.DataArray,
-) -> xr.DataArray:
-    """Gather spectra lazily from a `(time, y, x, band)` cube using per-pixel time indices."""
-    source_index = xr.DataArray(
-        source_index.data,
-        dims=source_index.dims,
-        coords={dim: source_index.coords[dim] for dim in source_index.dims},
-    )
-    invalid_mask = xr.DataArray(
-        invalid_mask.data,
-        dims=invalid_mask.dims,
-        coords={dim: invalid_mask.coords[dim] for dim in invalid_mask.dims},
-    )
-
-    # xarray vectorized indexing does not currently support chunked indexers.
-    # Materializing the 2-D per-pixel index is far cheaper than gathering the
-    # full 4-D reflectance cube eagerly.
-    if hasattr(source_index.data, "compute"):
-        source_index = source_index.compute()
-    if hasattr(invalid_mask.data, "compute"):
-        invalid_mask = invalid_mask.compute()
-
-    safe_index = source_index.where(~invalid_mask, other=0)
-    gathered = reflectance.isel(time=safe_index)
-    return gathered.where(~invalid_mask).astype(np.float32)
-
-
-def _select_time_indices(metric: xr.DataArray, *, mode: str) -> tuple[xr.DataArray, xr.DataArray]:
-    """Select per-pixel time indices from a metric with NaNs while preserving lazy execution."""
-    metric = xr.DataArray(
-        metric.data,
-        dims=metric.dims,
-        coords={dim: metric.coords[dim] for dim in metric.dims},
-        name=metric.name,
-    )
-    invalid = metric.isnull().all(dim="time")
-
-    if mode == "max":
-        filled = metric.fillna(-np.inf)
-        index = filled.argmax(dim="time")
-    elif mode == "min":
-        filled = metric.fillna(np.inf)
-        index = filled.argmin(dim="time")
-    else:
-        raise ValueError(f"Unsupported mode: {mode}")
-
-    index = index.where(~invalid, other=-1).astype(np.int32)
-    return index, invalid
 
 
 def build_viirs_r0(
@@ -262,19 +109,11 @@ def build_viirs_r0(
     blue_band: str = VIIRS_R0_BLUE_BAND,
     min_blue_reflectance: float = 0.10,
 ) -> xr.Dataset:
-    """
-    Build a VIIRS R0 composite from a prepared time series.
-
-    The selection rule mirrors the existing MODIS MATLAB implementation:
-    - use the spectrum from the min-blue day if min-NDSI stays positive
-    - otherwise use the spectrum from the max-NDVI day
-    """
-    if "time" not in prepared_timeseries.dims:
-        raise ValueError("prepared_timeseries must have a 'time' dimension")
-    logger = logger or LOGGER
-
-    candidate_ds = build_viirs_r0_candidate_metrics(
+    """Build a VIIRS R0 composite from a prepared time series."""
+    return build_shared_r0(
         prepared_timeseries,
+        logger=logger or LOGGER,
+        event_name="build_viirs_r0",
         max_sensor_zenith=max_sensor_zenith,
         ndvi_red_band=ndvi_red_band,
         ndvi_nir_band=ndvi_nir_band,
@@ -282,104 +121,42 @@ def build_viirs_r0(
         ndsi_swir_band=ndsi_swir_band,
         blue_band=blue_band,
         min_blue_reflectance=min_blue_reflectance,
+        copy_spatial_metadata_fn=copy_spatial_metadata,
     )
 
-    ndvi = candidate_ds["ndvi"]
-    ndsi = candidate_ds["ndsi"]
-    blue_metric = candidate_ds["blue_metric"]
-    candidate_ndvi = candidate_ds["candidate_ndvi"]
-    candidate_blue_metric = candidate_ds["candidate_blue_metric"]
-    has_negative_ndsi = candidate_ds["has_negative_ndsi"]
 
-    idx_max_ndvi, invalid_ndvi = _select_time_indices(candidate_ndvi, mode="max")
-    idx_min_blue, invalid_blue = _select_time_indices(candidate_blue_metric, mode="min")
-
-    reflectance = prepared_timeseries["reflectance"]
-    spectra_from_max_ndvi = _gather_spectra_by_index(reflectance, idx_max_ndvi, invalid_ndvi)
-    spectra_from_min_blue = _gather_spectra_by_index(reflectance, idx_min_blue, invalid_blue)
-
-    min_ndsi = ndsi.min(dim="time", skipna=True)
-    max_ndvi = candidate_ndvi.max(dim="time", skipna=True)
-    min_blue = candidate_blue_metric.min(dim="time", skipna=True)
-
-    use_min_blue = (~has_negative_ndsi).fillna(False).astype(bool)
-    invalid_final = xr.where(use_min_blue, invalid_blue, invalid_ndvi)
-    r0_values = xr.where(use_min_blue, spectra_from_min_blue, spectra_from_max_ndvi)
-    r0_values = r0_values.where(~invalid_final).astype(np.float32)
-
-    source_index = xr.where(use_min_blue, idx_min_blue, idx_max_ndvi)
-    source_index = source_index.where(~invalid_final, other=-1).astype(np.int32)
-
-    safe_source_index = xr.DataArray(
-        source_index.data,
-        dims=source_index.dims,
-        coords={dim: source_index.coords[dim] for dim in source_index.dims},
+def build_viirs_timeseries(
+    sources: list[str | Path | xr.Dataset],
+    *,
+    lut_file: str | Path | None = None,
+    logger: logging.Logger | None = None,
+    show_progress: bool = False,
+    progress_desc: str = "Preparing VIIRS scenes",
+    keep_variables: tuple[str, ...] | list[str] | str | None = None,
+    zarr_path: str | Path | None = None,
+    zarr_mode: str = "w",
+    chunks: dict[str, int] | None = None,
+    **prepare_kwargs,
+) -> xr.Dataset:
+    """Prepare and concatenate VIIRS scenes into a time stack for R0 workflows."""
+    return build_shared_timeseries(
+        sources,
+        lut_file=lut_file,
+        logger=logger or LOGGER,
+        show_progress=show_progress,
+        progress_desc=progress_desc,
+        keep_variables=keep_variables,
+        zarr_path=zarr_path,
+        zarr_mode=zarr_mode,
+        chunks=chunks,
+        parse_filename_fn=parse_viirs_surface_reflectance_filename,
+        prepare_scene_fn=prepare_viirs_scene_for_inversion,
+        reduce_scene_for_r0_fn=reduce_viirs_prepared_scene_for_r0,
+        start_event_name="build_viirs_timeseries",
+        scene_event_name="build_viirs_timeseries_scene",
+        summary_event_name="build_viirs_timeseries",
+        **prepare_kwargs,
     )
-    if hasattr(safe_source_index.data, "compute"):
-        safe_source_index = safe_source_index.compute()
-    safe_source_index = safe_source_index.where(safe_source_index >= 0, other=0)
-    source_time = prepared_timeseries["time"].isel(time=safe_source_index)
-    source_time = source_time.where(source_index >= 0)
-
-    valid_count = prepared_timeseries["valid_r0_mask"].sum(dim="time").astype(np.int32)
-    band_values = prepared_timeseries["band"].values.tolist()
-    time_values = prepared_timeseries["time"].values
-    used_min_blue_fraction = _scalar_dataarray_to_float(use_min_blue.mean()) if use_min_blue.size else float("nan")
-    valid_source = source_index >= 0
-    valid_source_fraction = _scalar_dataarray_to_float(valid_source.mean()) if valid_source.size else float("nan")
-
-    result = xr.Dataset(
-        data_vars={
-            "r0_reflectance": xr.DataArray(
-                r0_values.data,
-                dims=("y", "x", "band"),
-                coords={
-                    "y": prepared_timeseries["y"].values,
-                    "x": prepared_timeseries["x"].values,
-                    "band": prepared_timeseries["band"].values,
-                },
-            ),
-            "r0_source_index": xr.DataArray(
-                source_index.data,
-                dims=("y", "x"),
-                coords={"y": prepared_timeseries["y"].values, "x": prepared_timeseries["x"].values},
-            ),
-            "r0_source_time": xr.DataArray(
-                source_time.data,
-                dims=("y", "x"),
-                coords={"y": prepared_timeseries["y"].values, "x": prepared_timeseries["x"].values},
-            ),
-            "r0_used_min_blue_rule": xr.DataArray(
-                use_min_blue.data,
-                dims=("y", "x"),
-                coords={"y": prepared_timeseries["y"].values, "x": prepared_timeseries["x"].values},
-            ),
-            "r0_count": valid_count.astype(np.int32),
-            "max_ndvi": max_ndvi,
-            "min_ndsi": min_ndsi,
-            "min_blue_metric": min_blue,
-            "has_negative_ndsi": has_negative_ndsi,
-        },
-        attrs=prepared_timeseries.attrs.copy(),
-    )
-    result = copy_spatial_metadata(prepared_timeseries, result)
-
-    log_event(
-        logger,
-        "build_viirs_r0",
-        stage="r0",
-        event_type="summary",
-        time_count=int(prepared_timeseries.sizes["time"]),
-        time_coverage_start=str(time_values.min())[:10],
-        time_coverage_end=str(time_values.max())[:10],
-        selected_bands=band_values,
-        output_shape=list(result["r0_reflectance"].shape),
-        used_min_blue_fraction=round(used_min_blue_fraction, 6),
-        valid_source_fraction=round(valid_source_fraction, 6),
-        mean_r0_count=round(_scalar_dataarray_to_float(valid_count.mean()), 6),
-    )
-
-    return result
 
 
 def build_viirs_r0_from_sources(
@@ -400,28 +177,41 @@ def build_viirs_r0_from_sources(
     min_blue_reflectance: float = 0.10,
     **prepare_kwargs,
 ) -> xr.Dataset:
-    """Build VIIRS R0 incrementally from individual sources without forming a full time cube."""
+    """Build a VIIRS R0 composite incrementally from input scenes."""
     logger = logger or LOGGER
     resolved_r0_path = Path(r0_path).expanduser().resolve() if r0_path is not None else None
+    max_scene_index = len(sources) - 1 if sources else None
 
     if resolved_r0_path is not None and resolved_r0_path.exists() and not overwrite:
-        result = xr.open_dataset(resolved_r0_path)
+        result = load_existing_r0_if_valid(
+            resolved_r0_path,
+            expected_band_count=None,
+            max_scene_index=max_scene_index,
+        )
+        if result is not None:
+            log_event(
+                logger,
+                "build_viirs_r0_from_sources",
+                stage="r0",
+                event_type="summary",
+                status="loaded_existing",
+                r0_path=str(resolved_r0_path),
+                time_coverage_start=result.attrs.get("time_coverage_start"),
+                time_coverage_end=result.attrs.get("time_coverage_end"),
+                selected_bands=result["band"].values.tolist() if "band" in result.coords else None,
+                output_shape=list(result["r0_reflectance"].shape) if "r0_reflectance" in result else None,
+            )
+            return result
         log_event(
             logger,
             "build_viirs_r0_from_sources",
             stage="r0",
-            event_type="summary",
-            status="loaded_existing",
+            event_type="detail",
+            status="invalid_existing_rebuild",
             r0_path=str(resolved_r0_path),
-            time_coverage_start=result.attrs.get("time_coverage_start"),
-            time_coverage_end=result.attrs.get("time_coverage_end"),
-            selected_bands=result["band"].values.tolist() if "band" in result.coords else None,
-            output_shape=list(result["r0_reflectance"].shape) if "r0_reflectance" in result else None,
         )
-        return result
 
     iterator = sources
-
     if show_progress:
         try:
             from tqdm.auto import tqdm
@@ -429,7 +219,10 @@ def build_viirs_r0_from_sources(
             raise ImportError("show_progress=True requires tqdm to be installed") from exc
         iterator = tqdm(sources, desc=progress_desc)
 
-    requested_start_date, requested_end_date = _infer_source_date_bounds(sources)
+    requested_start_date, requested_end_date = infer_source_date_bounds(
+        sources,
+        parse_filename_fn=parse_viirs_surface_reflectance_filename,
+    )
     total_sources = len(sources)
     prepared_count = 0
 
@@ -476,8 +269,6 @@ def build_viirs_r0_from_sources(
 
         if first_prepared is None:
             first_prepared = prepared
-            y_values = prepared["y"].values
-            x_values = prepared["x"].values
             band_values = prepared["band"].values.tolist()
             spatial_shape = (prepared.sizes["y"], prepared.sizes["x"])
             spectral_shape = spatial_shape + (prepared.sizes["band"],)
@@ -609,13 +400,19 @@ def build_viirs_r0_from_sources(
 
     result.attrs["time_coverage_start"] = str(min(observed_times))[:10]
     result.attrs["time_coverage_end"] = str(max(observed_times))[:10]
+    result.attrs["build_status"] = "complete"
 
     used_min_blue_fraction = float(np.mean(use_min_blue)) if use_min_blue.size else float("nan")
     valid_source_fraction = float(np.mean(valid_source)) if valid_source.size else float("nan")
 
     if resolved_r0_path is not None:
         resolved_r0_path.parent.mkdir(parents=True, exist_ok=True)
-        result.to_netcdf(resolved_r0_path)
+        write_r0_dataset_atomically(
+            result,
+            resolved_r0_path,
+            expected_band_count=len(band_values),
+            max_scene_index=max_scene_index,
+        )
 
     log_event(
         logger,
@@ -637,158 +434,3 @@ def build_viirs_r0_from_sources(
     )
 
     return result
-
-
-def build_viirs_timeseries(
-    sources: list[str | Path | xr.Dataset],
-    *,
-    lut_file: str | Path | None = None,
-    logger: logging.Logger | None = None,
-    show_progress: bool = False,
-    progress_desc: str = "Preparing VIIRS scenes",
-    keep_variables: tuple[str, ...] | list[str] | str | None = None,
-    zarr_path: str | Path | None = None,
-    zarr_mode: str = "w",
-    chunks: dict[str, int] | None = None,
-    **prepare_kwargs,
-) -> xr.Dataset:
-    """Prepare and concatenate multiple VIIRS scenes into a single time stack."""
-    prepared_scenes = []
-    times = []
-    iterator = sources
-    logger = logger or LOGGER
-
-    if show_progress:
-        try:
-            from tqdm.auto import tqdm
-        except ImportError as exc:
-            raise ImportError("show_progress=True requires tqdm to be installed") from exc
-        iterator = tqdm(sources, desc=progress_desc)
-
-    total_sources = len(sources)
-    prepared_count = 0
-    requested_start_date, requested_end_date = _infer_source_date_bounds(sources)
-    resolved_zarr_path = Path(zarr_path).expanduser().resolve() if zarr_path is not None else None
-    wrote_any_scene = False
-
-    log_event(
-        logger,
-        "build_viirs_timeseries",
-        stage="timeseries",
-        event_type="start",
-        status="started",
-        scenes_requested=total_sources,
-        requested_time_coverage_start=requested_start_date,
-        requested_time_coverage_end=requested_end_date,
-    )
-
-    for idx, source in enumerate(iterator, start=1):
-        if isinstance(source, xr.Dataset) and "time" in source.dims:
-            prepared_scenes.append(source)
-            times.extend(source["time"].values.tolist())
-            prepared_count += int(source.sizes["time"])
-            log_event(
-                logger,
-                "build_viirs_timeseries_scene",
-                stage="timeseries",
-                event_type="detail",
-                status="reused_dataset",
-                source_type="dataset_with_time",
-                processed_scenes=f"{idx}/{total_sources}",
-            )
-            continue
-
-        if isinstance(source, xr.Dataset) and "reflectance" in source.data_vars:
-            prepared = source
-            scene_name = prepared.attrs.get("source_path") or f"dataset_{idx}"
-            log_event(
-                logger,
-                "build_viirs_timeseries_scene",
-                stage="timeseries",
-                event_type="detail",
-                status="reused_dataset",
-                source_type="prepared_dataset",
-                scene_name=Path(scene_name).name,
-                processed_scenes=f"{idx}/{total_sources}",
-            )
-        else:
-            prepared = prepare_viirs_scene_for_inversion(source, lut_file=lut_file, logger=logger, **prepare_kwargs)
-            log_event(
-                logger,
-                "build_viirs_timeseries_scene",
-                stage="timeseries",
-                event_type="detail",
-                status="prepared",
-                source_type="path",
-                scene_name=Path(source).name,
-                input_path=str(source),
-                processed_scenes=f"{idx}/{total_sources}",
-            )
-
-        acquisition_date = prepared.attrs.get("acquisition_date")
-        if acquisition_date is None:
-            raise ValueError("Prepared VIIRS scene is missing 'acquisition_date' in attrs")
-
-        if keep_variables == "r0":
-            prepared = reduce_viirs_prepared_scene_for_r0(prepared)
-        elif keep_variables is not None:
-            variable_names = list(keep_variables)
-            missing = [name for name in variable_names if name not in prepared]
-            if missing:
-                raise ValueError(f"Prepared VIIRS scene is missing requested variables: {missing}")
-            prepared = prepared[variable_names].copy()
-            prepared.attrs = prepared.attrs.copy()
-
-        prepared = prepared.expand_dims(time=[np.datetime64(acquisition_date)])
-        times.append(np.datetime64(acquisition_date))
-        prepared_count += 1
-
-        if chunks is not None:
-            normalized_chunks = {
-                dim: prepared.sizes[dim] if size == -1 else size
-                for dim, size in chunks.items()
-                if dim in prepared.dims
-            }
-            if normalized_chunks:
-                prepared = prepared.chunk(normalized_chunks)
-
-        if resolved_zarr_path is not None:
-            if not wrote_any_scene:
-                resolved_zarr_path.parent.mkdir(parents=True, exist_ok=True)
-                prepared.to_zarr(resolved_zarr_path, mode=zarr_mode)
-                wrote_any_scene = True
-            else:
-                prepared.to_zarr(resolved_zarr_path, mode="a", append_dim="time")
-        else:
-            prepared_scenes.append(prepared)
-
-    if not prepared_scenes and resolved_zarr_path is None:
-        raise ValueError("At least one VIIRS scene is required to build a timeseries")
-
-    if resolved_zarr_path is not None:
-        if not wrote_any_scene:
-            raise ValueError("At least one VIIRS scene is required to build a timeseries")
-        timeseries = xr.open_zarr(resolved_zarr_path)
-    else:
-        timeseries = xr.concat(prepared_scenes, dim="time")
-
-    if "time" in timeseries.coords:
-        timeseries = timeseries.sortby("time")
-    timeseries.attrs["time_coverage_start"] = str(timeseries["time"].min().values)
-    timeseries.attrs["time_coverage_end"] = str(timeseries["time"].max().values)
-    log_event(
-        logger,
-        "build_viirs_timeseries",
-        stage="timeseries",
-        event_type="summary",
-        status="completed",
-        time_count=int(timeseries.sizes["time"]),
-        time_coverage_start=timeseries.attrs["time_coverage_start"][:10],
-        time_coverage_end=timeseries.attrs["time_coverage_end"][:10],
-        selected_bands=timeseries["band"].values.tolist() if "band" in timeseries.coords else None,
-        output_shape=list(timeseries["reflectance"].shape) if "reflectance" in timeseries else None,
-        scenes_requested=total_sources,
-        scenes_prepared=prepared_count,
-        zarr_path=str(resolved_zarr_path) if resolved_zarr_path is not None else None,
-    )
-    return timeseries
