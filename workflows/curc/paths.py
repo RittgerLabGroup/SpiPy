@@ -1,0 +1,39 @@
+"""Path conventions for CURC-specific SpiPy workflow inputs, outputs, and logs."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from workflows.curc.config import CurcWorkflowConfig
+
+
+def input_platform_root(config: CurcWorkflowConfig, platform: str) -> Path:
+    return config.scratch_root / "input" / config.sensor / platform
+
+
+def reflectance_dir(config: CurcWorkflowConfig, platform: str) -> Path:
+    return input_platform_root(config, platform) / "reflectance"
+
+
+def ancillary_dir(config: CurcWorkflowConfig, platform: str) -> Path:
+    return input_platform_root(config, platform) / "ancillary"
+
+
+def r0_dir(config: CurcWorkflowConfig, platform: str) -> Path:
+    return ancillary_dir(config, platform) / "r0"
+
+
+def output_tile_root(config: CurcWorkflowConfig, platform: str, tile: str) -> Path:
+    return config.scratch_root / "output" / config.sensor / platform / tile
+
+
+def output_date_root(config: CurcWorkflowConfig, platform: str, tile: str, date_token: str) -> Path:
+    return output_tile_root(config, platform, tile) / date_token
+
+
+def log_root(config: CurcWorkflowConfig) -> Path:
+    return config.scratch_root / "logs"
+
+
+def job_log_dir(config: CurcWorkflowConfig, platform: str, tile: str, year: int) -> Path:
+    return log_root(config) / config.sensor / platform / tile / str(year)

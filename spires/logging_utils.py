@@ -40,6 +40,7 @@ _LOG_FIELD_PRIORITY = (
 _VISUAL_LOG_PREFIX_BY_EVENT_TYPE = {
     "start": "====== START ======",
     "summary": "====== SUMMARY ======",
+    "submission": "====== SUBMISSION ======",
 }
 
 

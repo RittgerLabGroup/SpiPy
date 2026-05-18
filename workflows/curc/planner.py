@@ -1,0 +1,185 @@
+"""Step-oriented planning for CURC workflows."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from workflows.curc.config import CurcWorkflowConfig
+from workflows.curc.discovery import discover_viirs_snpp_reflectance_files
+from workflows.curc.paths import ancillary_dir, job_log_dir, output_tile_root, r0_dir, reflectance_dir
+from workflows.curc.steps import InversionTaskPlan, SlurmArrayPlan, WorkflowStepPlan
+from spires.sensors.viirs.hdf import parse_viirs_surface_reflectance_filename
+
+
+def _annual_r0_path(config: CurcWorkflowConfig, *, tile: str, r0_year: int) -> Path:
+    return r0_dir(config, "snpp") / tile / str(r0_year)
+
+
+def _group_source_paths_by_date(discovered: list[Path]) -> dict[str, list[Path]]:
+    grouped: dict[str, list[Path]] = {}
+    for path in discovered:
+        acquisition_date = parse_viirs_surface_reflectance_filename(path).acquisition_date
+        grouped.setdefault(acquisition_date, []).append(path)
+    return {date: sorted(paths) for date, paths in sorted(grouped.items())}
+
+
+def plan_viirs_snpp_workflow_steps(
+    config: CurcWorkflowConfig,
+    *,
+    tile: str,
+    water_year: int,
+    target_dates: tuple[str, ...] | list[str] = (),
+    r0_year: int | None = None,
+) -> list[WorkflowStepPlan]:
+    """Plan explicit VIIRS SNPP workflow steps for a tile and water year."""
+    canonical = config.canonicalized()
+    if canonical.sensor != "viirs" or canonical.platforms != ("snpp",):
+        raise ValueError("This planner currently supports only sensor='viirs' and platforms=('snpp',)")
+
+    discovered = discover_viirs_snpp_reflectance_files(
+        canonical,
+        tile=tile,
+        water_year=water_year if not target_dates else None,
+        target_dates=tuple(target_dates),
+    )
+    acquisition_dates = tuple(
+        sorted({parse_viirs_surface_reflectance_filename(path).acquisition_date for path in discovered})
+    )
+    selected_dates = acquisition_dates if acquisition_dates else tuple(target_dates)
+    selected_date = selected_dates[0] if selected_dates else None
+    inversion_destination = (
+        output_tile_root(canonical, "snpp", tile) / selected_date
+        if selected_date is not None and len(selected_dates) == 1
+        else output_tile_root(canonical, "snpp", tile)
+    )
+    resolved_r0_year = water_year if r0_year is None else r0_year
+
+    return [
+        WorkflowStepPlan(
+            step="stage_reflectance",
+            sensor="viirs",
+            platform="snpp",
+            tile=tile,
+            water_year=water_year,
+            date_count=len(selected_dates),
+            dates=selected_dates,
+            source_paths=tuple(str(path) for path in discovered),
+            destination_path=str(reflectance_dir(canonical, "snpp") / tile / str(water_year)),
+            notes=(
+                "Copy or rsync the discovered VNP09GA files from /pl to /scratch/alpine.",
+                "This step can target a full water year or a single acquisition date.",
+            ),
+        ),
+        WorkflowStepPlan(
+            step="stage_ancillary",
+            sensor="viirs",
+            platform="snpp",
+            tile=tile,
+            water_year=water_year,
+            date_count=len(selected_dates),
+            dates=selected_dates,
+            source_paths=(),
+            destination_path=str(ancillary_dir(canonical, "snpp") / tile),
+            notes=(
+                "Ensure static ancillary inputs such as canopy, terrain, landcover, and water masks are staged.",
+                "This is independent of a specific scene date and should be rerunnable on its own.",
+            ),
+        ),
+        WorkflowStepPlan(
+            step="build_r0",
+            sensor="viirs",
+            platform="snpp",
+            tile=tile,
+            water_year=water_year,
+            date_count=len(selected_dates),
+            dates=selected_dates,
+            source_paths=tuple(str(path) for path in discovered),
+            destination_path=str(_annual_r0_path(canonical, tile=tile, r0_year=resolved_r0_year)),
+            notes=(
+                "Build or refresh the annual R0 inputs needed for inversion.",
+                "This step should eventually use a summer-only source selection rather than the full water-year list.",
+            ),
+            r0_year=resolved_r0_year,
+        ),
+        WorkflowStepPlan(
+            step="run_inversion",
+            sensor="viirs",
+            platform="snpp",
+            tile=tile,
+            water_year=water_year,
+            date_count=len(selected_dates),
+            dates=selected_dates,
+            source_paths=tuple(str(path) for path in discovered),
+            destination_path=str(inversion_destination),
+            notes=(
+                "Run inversion for the discovered scenes using the staged reflectance, ancillary inputs, and R0 product.",
+                f"Per-job logs should land under {job_log_dir(canonical, 'snpp', tile, water_year)}.",
+            ),
+            r0_year=resolved_r0_year,
+        ),
+    ]
+
+
+def plan_viirs_snpp_inversion_array(
+    config: CurcWorkflowConfig,
+    *,
+    tile: str,
+    water_year: int,
+    target_dates: tuple[str, ...] | list[str] = (),
+    r0_year: int | None = None,
+    max_concurrent_tasks: int | None = None,
+) -> SlurmArrayPlan:
+    """Plan a Slurm array for VIIRS SNPP inversion with one logical task per date."""
+    canonical = config.canonicalized()
+    if canonical.sensor != "viirs" or canonical.platforms != ("snpp",):
+        raise ValueError("This planner currently supports only sensor='viirs' and platforms=('snpp',)")
+
+    discovered = discover_viirs_snpp_reflectance_files(
+        canonical,
+        tile=tile,
+        water_year=water_year if not target_dates else None,
+        target_dates=tuple(target_dates),
+    )
+    grouped = _group_source_paths_by_date(discovered)
+    if not grouped and target_dates:
+        grouped = {date: [] for date in target_dates}
+
+    resolved_r0_year = water_year if r0_year is None else r0_year
+    log_dir = job_log_dir(canonical, "snpp", tile, water_year)
+    tasks = []
+    for task_index, (acquisition_date, paths) in enumerate(grouped.items()):
+        tasks.append(
+            InversionTaskPlan(
+                task_index=task_index,
+                sensor="viirs",
+                platform="snpp",
+                tile=tile,
+                water_year=water_year,
+                date=acquisition_date,
+                source_paths=tuple(str(path) for path in paths),
+                output_path=str(output_tile_root(canonical, "snpp", tile) / acquisition_date),
+                log_path=str(log_dir / f"run_inversion_{acquisition_date}.log"),
+                r0_year=resolved_r0_year,
+                retry_count=0,
+            )
+        )
+
+    return SlurmArrayPlan(
+        step="run_inversion",
+        job_name=f"spipy-viirs-snpp-{tile}-wy{water_year}",
+        sensor="viirs",
+        platform="snpp",
+        tile=tile,
+        water_year=water_year,
+        task_count=len(tasks),
+        array_indices=tuple(task.task_index for task in tasks),
+        max_concurrent_tasks=max_concurrent_tasks,
+        max_auto_retry_count=canonical.max_auto_retry_count,
+        tasks=tuple(tasks),
+        slurm_profile=canonical.slurm_profile,
+        notes=(
+            "Logical inversion unit is one acquisition date.",
+            "Submission unit is one Slurm array spanning those dates.",
+        ),
+        r0_year=resolved_r0_year,
+    )
