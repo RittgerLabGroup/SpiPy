@@ -19,9 +19,16 @@ Keep a short current-state note for working in this repository on the CURC VSCod
 
 - `spipy14` is installed and runnable on this server
 - the local checkout now imports cleanly after building the SWIG extension in-place
+- active development branch for this session: `workflows/viirs-workflow`
 - verified command:
   - `module load miniforge && mamba run -n spipy14 python -c "import spires; print('imports_ok')"`
   - returned `imports_ok`
+- verified VIIRS imports:
+  - `module load miniforge && mamba run -n spipy14 python -c "import spires; import spires.sensors.api; import spires.sensors.viirs.workflow; print('viirs_imports_ok')"`
+  - returned `viirs_imports_ok`
+- verified VIIRS pytest subset:
+  - `module load miniforge && mamba run -n spipy14 python -m pytest tests/test_viirs_qa.py tests/test_viirs_workflow.py tests/test_viirs_ancillary.py tests/test_viirs_r0.py tests/test_viirs_hdf.py`
+  - result: `38 passed, 6 skipped`
 
 ## Local Build Step
 
@@ -71,4 +78,25 @@ For one-off commands:
 ```bash
 module load miniforge
 mamba run -n spipy14 <command>
+```
+
+## Git / GitHub Notes
+
+- this server now authenticates to GitHub over SSH using `~/.ssh/curc`
+- repo `origin` was switched from HTTPS to SSH:
+
+```bash
+git remote set-url origin git@github.com:RittgerLabGroup/SpiPy.git
+```
+
+- verify auth with:
+
+```bash
+ssh -T git@github.com
+```
+
+- current validated push path from this server:
+
+```bash
+git push
 ```
