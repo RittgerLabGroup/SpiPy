@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from spires.sensors.full_workflow import find_default_canopy_fraction
 from spires.sensors.viirs.workflow import (
-    _find_default_viirs_canopy_fraction,
     get_viirs_execution_profile,
     run_viirs_inversion,
 )
@@ -125,8 +125,8 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
-    monkeypatch.setattr("spires.sensors.viirs.workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
     result = run_viirs_inversion(
         scene,
@@ -149,7 +149,7 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
     assert captured["grouping_method"] == "first"
     assert captured["grouping_tolerance"] == pytest.approx(0.02)
     np.testing.assert_allclose(captured["x0"], np.array([0.5, 0.05, 10, 250], dtype=np.float64))
-    assert np.isnan(result["fsca"].isel(y=0, x=1))
+    assert np.isnan(result["raw_viewable_snow_fraction"].isel(y=0, x=1))
     assert result.attrs["lut_file"].endswith(".mat")
     assert result.attrs["execution_profile"] == "local"
     assert list(result.attrs["selected_bands"]) == ["I1", "I2", "I3", "M2", "M4", "M8", "M11"]
@@ -199,8 +199,8 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
-    monkeypatch.setattr("spires.sensors.viirs.workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
     result = run_viirs_inversion(
         scene,
@@ -211,7 +211,7 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
     )
 
     assert captured["valid_mask"] is None
-    assert result["fsca"].isel(y=0, x=1).item() == pytest.approx(0.75)
+    assert result["raw_viewable_snow_fraction"].isel(y=0, x=1).item() == pytest.approx(0.75)
     assert result["raw_viewable_snow_fraction"].isel(y=0, x=1).item() == pytest.approx(0.75)
     assert not bool(result["valid_inversion_mask"].isel(y=0, x=1))
     assert result.attrs["valid_inversion_mask_applied"] == 0
@@ -265,8 +265,8 @@ def test_run_viirs_inversion_applies_canopy_and_ice_snow_fraction_adjustment(mon
             }
         )
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
-    monkeypatch.setattr("spires.sensors.viirs.workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
     result = run_viirs_inversion(
         scene,
@@ -294,7 +294,7 @@ def test_run_viirs_inversion_rejects_conflicting_mask_keywords(monkeypatch):
     scene = build_mock_prepared_scene()
     r0 = build_mock_r0()
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
 
     with pytest.raises(ValueError, match="different values"):
         run_viirs_inversion(
@@ -349,8 +349,8 @@ def test_run_viirs_inversion_returns_netcdf_serializable_attrs(monkeypatch, tmp_
             }
         )
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
-    monkeypatch.setattr("spires.sensors.viirs.workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
     result = run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local")
 
@@ -365,7 +365,7 @@ def test_run_viirs_inversion_rejects_scene_r0_band_mismatch(monkeypatch):
     scene = build_mock_prepared_scene()
     r0 = build_mock_r0().sel(band=["I1", "I2", "I3", "M2", "M4", "M11", "M8"])
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
 
     with pytest.raises(ValueError, match="Scene and R0 band order do not match"):
         run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE)
@@ -376,7 +376,7 @@ def test_run_viirs_inversion_rejects_scene_lut_platform_mismatch(monkeypatch):
     scene.attrs["platform"] = "snpp"
     r0 = build_mock_r0()
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
 
     with pytest.raises(ValueError, match="does not match LUT platform"):
         run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE)
@@ -420,8 +420,8 @@ def test_run_viirs_inversion_accepts_noaa21_lut_platform(monkeypatch, tmp_path):
             }
         )
 
-    monkeypatch.setattr("spires.sensors.viirs.workflow.LutInterpolator", DummyInterpolator)
-    monkeypatch.setattr("spires.sensors.viirs.workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
     result = run_viirs_inversion(scene, r0, lut_file=lut_file)
 
@@ -437,4 +437,4 @@ def test_default_viirs_canopy_lookup_is_platform_agnostic(monkeypatch, tmp_path)
 
     monkeypatch.chdir(tmp_path)
 
-    assert _find_default_viirs_canopy_fraction(scene) == canopy_path
+    assert find_default_canopy_fraction(scene, sensor_name="viirs") == canopy_path

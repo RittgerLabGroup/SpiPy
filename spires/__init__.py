@@ -1,3 +1,5 @@
+import spires.core
+
 from spires.invert import *
 from spires.interpolator import *
 from spires.logging_utils import *

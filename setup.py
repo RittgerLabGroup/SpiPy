@@ -1,32 +1,42 @@
 #!/usr/bin/env/python
 
+import os
+
 import numpy
 import setuptools
 from setuptools.command.build_py import build_py as _build_py
-import os
 
 
 conda_prefix = os.environ.get("CONDA_PREFIX", "/usr")  # fallback if not in conda
 
+def _existing_dirs(paths):
+    return [path for path in paths if os.path.isdir(path)]
 
-NLOP_LIB_DIRS = [
-    '/opt/homebrew/lib',                    # MacOS BS
-    #'/opt/homebrew/Cellar/nlopt/2.7.1/lib', # For ARM
-    #'/usr/local/Cellar/nlopt/2.7.1/lib',    # For x86
-    '/usr/lib',                             # system library path
-    '/usr/local/lib',                       # custom lib path
-    os.path.join(conda_prefix, 'lib'),
-]
 
-NLOP_INCLUDE_DIRS = [
-    '/opt/homebrew/include',
-    #'/opt/homebrew/Cellar/nlopt/2.7.1/include',    # For ARM
-    #'/usr/local/Cellar/nlopt/2.7.1/include',       # For x86
-    '/usr/include',                                # system includes (e.g. nlopt.hpp)
-    '/usr/local/include',                          # custom install path
-    'include',                                     # local project includes
-    os.path.join(conda_prefix, 'include'),
-]
+if os.environ.get("CONDA_PREFIX"):
+    # In Conda builds, prefer the active environment and avoid mixing in
+    # system headers that can conflict with the env toolchain.
+    NLOP_LIB_DIRS = _existing_dirs([
+        os.path.join(conda_prefix, 'lib'),
+    ])
+    NLOP_INCLUDE_DIRS = _existing_dirs([
+        'include',
+        os.path.join(conda_prefix, 'include'),
+    ])
+else:
+    NLOP_LIB_DIRS = _existing_dirs([
+        '/opt/homebrew/lib',
+        '/usr/lib',
+        '/usr/local/lib',
+        os.path.join(conda_prefix, 'lib'),
+    ])
+    NLOP_INCLUDE_DIRS = _existing_dirs([
+        '/opt/homebrew/include',
+        '/usr/include',
+        '/usr/local/include',
+        'include',
+        os.path.join(conda_prefix, 'include'),
+    ])
 
 INCLUDE_DIRS = NLOP_INCLUDE_DIRS + [numpy.get_include()]
 
