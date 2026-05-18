@@ -23,6 +23,16 @@ def water_year_calendar_years(water_year: int) -> tuple[int, int]:
     return start.year, end.year
 
 
+def default_r0_year_for_water_year(water_year: int) -> int:
+    """Return the default calendar year used to build R0 for a water year."""
+    return water_year - 1
+
+
+def r0_source_bounds_for_year(r0_year: int) -> tuple[date, date]:
+    """Return the inclusive summer window used to build one annual R0 product."""
+    return date(r0_year, 6, 1), date(r0_year, 9, 30)
+
+
 def iter_dates(start: date, end: date) -> list[str]:
     """Return all ISO dates between two endpoints, inclusive."""
     current = start
@@ -31,4 +41,3 @@ def iter_dates(start: date, end: date) -> list[str]:
         result.append(current.isoformat())
         current += timedelta(days=1)
     return result
-

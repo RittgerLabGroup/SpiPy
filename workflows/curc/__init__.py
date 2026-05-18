@@ -1,8 +1,14 @@
 """CURC-specific workflow orchestration for large-scale SpiPy runs."""
 
 from workflows.curc.config import CurcWorkflowConfig, SlurmProfile
+from workflows.curc.execution import (
+    execute_viirs_snpp_workflow_step,
+    preview_viirs_snpp_workflow_step_execution,
+    resolve_viirs_snpp_workflow_step,
+)
 from workflows.curc.manifest import PlannedJob, build_job_manifest
 from workflows.curc.planner import plan_viirs_snpp_inversion_array, plan_viirs_snpp_workflow_steps
+from workflows.curc.runner import preview_viirs_snpp_step_execution, run_viirs_snpp_step
 from workflows.curc.runtime import (
     InversionRuntimeContext,
     build_viirs_snpp_inversion_runtime_context,
@@ -27,6 +33,7 @@ from workflows.curc.task_manifest import (
 
 __all__ = [
     "CurcWorkflowConfig",
+    "execute_viirs_snpp_workflow_step",
     "InversionArrayStatusReport",
     "InversionTaskPlan",
     "InversionRuntimeContext",
@@ -40,7 +47,11 @@ __all__ = [
     "execute_viirs_snpp_inversion_task",
     "plan_viirs_snpp_inversion_array",
     "plan_viirs_snpp_workflow_steps",
+    "preview_viirs_snpp_step_execution",
+    "preview_viirs_snpp_workflow_step_execution",
     "resolve_inversion_task_from_manifest",
+    "resolve_viirs_snpp_workflow_step",
+    "run_viirs_snpp_step",
     "scan_inversion_array_status",
     "should_auto_retry",
     "render_array_submission_payload_from_manifest",

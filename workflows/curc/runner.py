@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from workflows.curc.config import CurcWorkflowConfig
+from workflows.curc.execution import (
+    execute_viirs_snpp_workflow_step,
+    preview_viirs_snpp_workflow_step_execution,
+    resolve_viirs_snpp_workflow_step,
+)
 from workflows.curc.manifest import build_job_manifest
 from workflows.curc.planner import plan_viirs_snpp_inversion_array, plan_viirs_snpp_workflow_steps
 from workflows.curc.runtime import (
@@ -85,6 +90,72 @@ def plan_viirs_snpp_inversion_array_jobs(
         target_dates=target_dates,
         r0_year=r0_year,
         max_concurrent_tasks=max_concurrent_tasks,
+    )
+
+
+def preview_viirs_snpp_step_execution(
+    config: CurcWorkflowConfig,
+    *,
+    tile: str,
+    water_year: int,
+    step: str,
+    target_dates: tuple[str, ...] | list[str] = (),
+    r0_year: int | None = None,
+    rsync_executable: str = "rsync",
+    lut_file: str | None = None,
+    overwrite: bool = False,
+    show_progress: bool = False,
+):
+    """Preview how one planned VIIRS SNPP workflow step would execute."""
+    step_plan = resolve_viirs_snpp_workflow_step(
+        config,
+        tile=tile,
+        water_year=water_year,
+        step=step,
+        target_dates=target_dates,
+        r0_year=r0_year,
+    )
+    return preview_viirs_snpp_workflow_step_execution(
+        config,
+        step_plan,
+        rsync_executable=rsync_executable,
+        lut_file=lut_file,
+        overwrite=overwrite,
+        show_progress=show_progress,
+    )
+
+
+def run_viirs_snpp_step(
+    config: CurcWorkflowConfig,
+    *,
+    tile: str,
+    water_year: int,
+    step: str,
+    target_dates: tuple[str, ...] | list[str] = (),
+    r0_year: int | None = None,
+    execute: bool = False,
+    rsync_executable: str = "rsync",
+    lut_file: str | None = None,
+    overwrite: bool = False,
+    show_progress: bool = False,
+):
+    """Preview or execute one planned VIIRS SNPP workflow step."""
+    step_plan = resolve_viirs_snpp_workflow_step(
+        config,
+        tile=tile,
+        water_year=water_year,
+        step=step,
+        target_dates=target_dates,
+        r0_year=r0_year,
+    )
+    return execute_viirs_snpp_workflow_step(
+        config,
+        step_plan,
+        execute=execute,
+        rsync_executable=rsync_executable,
+        lut_file=lut_file,
+        overwrite=overwrite,
+        show_progress=show_progress,
     )
 
 

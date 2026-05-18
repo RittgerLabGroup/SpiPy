@@ -127,6 +127,33 @@ git push
   - plan `build_r0`
   - plan `run_inversion`
 - for the real SNPP example, tile `h09v05`, water year `2024` currently discovers `348` reflectance files
+- current direct-execution helpers are now in place for:
+  - `stage_reflectance` via rendered or executable `rsync` commands
+  - `stage_ancillary` via direct directory/layout creation
+  - `build_r0` via a Python entrypoint that writes `r0_reflectance.nc`
+  - `run_inversion` remains on the manifest-backed Slurm array path
+- CURC `build_r0` output naming was updated after initial notebook testing:
+  - future outputs now write as `{platform}_r0_{tile}_{year}.nc`
+  - example: `snpp_r0_h08v05_2022.nc`
+- future persisted `R0` files now omit scene-specific attrs that are not appropriate for a composite product:
+  - `acquisition_date`
+  - `processing_timestamp`
+  - `lut_file`
+- notebook testing confirmed that a small direct `stage_reflectance` execution completed successfully and that a direct `build_r0` test run completed for the prior-summer source set
+
+## Immediate Next Steps
+
+- the notebook helper cells for executable step testing are now in active use in:
+  - `examples/12_curc_sensor_workflow_planning.ipynb`
+- completed notebook validation milestones so far:
+  - previewed executable `stage_reflectance`, `stage_ancillary`, and `build_r0`
+  - executed a small single-date `stage_reflectance` copy successfully
+  - executed `build_r0` for the prior-summer source window successfully
+- the next active task is to create an executable path for the actual `run_inversion` step now that `R0` has been built and validated in the notebook workflow
+- once executable `run_inversion` passes for the small targeted case, the next stage is to run a full water year
+- recommended rationale for that order:
+  - keep the first executable inversion test narrow enough to debug runtime path, LUT, ancillary, and output issues quickly
+  - only scale to a full water year after the single-case executable inversion path behaves as expected
 
 ## Slurm Array / Retry Status
 
@@ -140,6 +167,8 @@ git push
   - `scripts/run_curc_inversion_array_task.py`
   - resolves staged reflectance paths, ancillary root, R0 path, output path, and log path
   - dry-run mode currently reports missing staged inputs/R0 cleanly
+- runtime R0 lookup now expects the new CURC naming convention:
+  - `{platform}_r0_{tile}_{year}.nc`
 - current per-task output convention for inversion runtime is:
   - `.../output/<sensor>/<platform>/<tile>/<date>/inversion.nc`
 - CURC-side structured logging is now wired into the existing `spires` logging flow

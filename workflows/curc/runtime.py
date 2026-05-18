@@ -13,6 +13,8 @@ from spires.sensors.io import load_output_dataset_if_valid, write_output_dataset
 from spires.sensors.viirs.workflow import run_viirs_inversion
 import xarray as xr
 
+from workflows.curc.config import CurcWorkflowConfig
+from workflows.curc.paths import r0_dataset_path
 from workflows.curc.steps import InversionTaskPlan
 from workflows.curc.task_manifest import resolve_inversion_task_from_manifest
 
@@ -110,6 +112,19 @@ def infer_scratch_root_from_output_path(output_path: str | Path) -> Path:
     return Path(*parts[:output_index])
 
 
+def _runtime_r0_dataset_path(scratch_root: Path, task: InversionTaskPlan) -> Path:
+    config = CurcWorkflowConfig(
+        scratch_root=scratch_root,
+        input_source_root=scratch_root,
+        sensor=task.sensor,
+        platforms=(task.platform,),
+        tiles=(task.tile,),
+        years=(),
+        water_years=(task.water_year,),
+    )
+    return r0_dataset_path(config, task.platform, task.tile, task.r0_year)
+
+
 def build_viirs_snpp_inversion_runtime_context(
     manifest_path: str | Path,
     *,
@@ -125,7 +140,7 @@ def build_viirs_snpp_inversion_runtime_context(
     ancillary_root = scratch_root / "input" / task.sensor / task.platform / "ancillary" / task.tile
     r0_root = scratch_root / "input" / task.sensor / task.platform / "ancillary" / "r0" / task.tile / str(task.r0_year)
     resolved_lut_file = default_viirs_lut_file(task.platform) if lut_file is None else Path(lut_file).expanduser().resolve()
-    r0_path = r0_root / "r0_reflectance.nc"
+    r0_path = _runtime_r0_dataset_path(scratch_root, task)
     canopy_fraction_path = _infer_static_fraction_path(ancillary_root, "canopy_fraction")
     ice_fraction_path = _infer_static_fraction_path(ancillary_root, "glacier_ice_fraction")
 

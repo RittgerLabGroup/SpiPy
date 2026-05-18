@@ -237,6 +237,27 @@ def test_unified_viirs_r0_from_sources_loads_existing_file_and_logs_path(tmp_pat
     assert f'r0_path="{r0_path.resolve()}"' in contents
 
 
+def test_unified_viirs_r0_from_sources_drops_scene_specific_attrs(tmp_path):
+    r0_path = tmp_path / "snpp_r0_h08v05_2026.nc"
+    scene = build_mock_prepared_scene("2026-06-01", np.full((2, 7), 0.2, dtype=np.float32))
+    scene.attrs["processing_timestamp"] = "2026160123456"
+    scene.attrs["lut_file"] = "/tmp/lut_viirs.mat"
+
+    result = build_sensor_r0_from_sources([scene], sensor="viirs", platform="snpp", r0_path=r0_path)
+
+    assert "acquisition_date" not in result.attrs
+    assert "processing_timestamp" not in result.attrs
+    assert "lut_file" not in result.attrs
+
+    written = xr.open_dataset(r0_path)
+    try:
+        assert "acquisition_date" not in written.attrs
+        assert "processing_timestamp" not in written.attrs
+        assert "lut_file" not in written.attrs
+    finally:
+        written.close()
+
+
 def test_build_viirs_r0_accepts_chunked_timeseries():
     da = pytest.importorskip("dask.array")
 

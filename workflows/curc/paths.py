@@ -23,6 +23,10 @@ def r0_dir(config: CurcWorkflowConfig, platform: str) -> Path:
     return ancillary_dir(config, platform) / "r0"
 
 
+def r0_dataset_path(config: CurcWorkflowConfig, platform: str, tile: str, year: int) -> Path:
+    return r0_dir(config, platform) / tile / str(year) / f"{platform}_r0_{tile}_{year}.nc"
+
+
 def output_tile_root(config: CurcWorkflowConfig, platform: str, tile: str) -> Path:
     return config.scratch_root / "output" / config.sensor / platform / tile
 

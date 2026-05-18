@@ -25,6 +25,11 @@ R0_REQUIRED_VARS = (
     "r0_used_min_blue_rule",
     "r0_count",
 )
+R0_EXCLUDED_DATASET_ATTRS = {
+    "acquisition_date",
+    "processing_timestamp",
+    "lut_file",
+}
 
 ParseFilenameFn = Callable[[str | Path], object]
 PrepareSceneFn = Callable[..., xr.Dataset]
@@ -90,6 +95,16 @@ def sanitize_dataset_for_zarr_write(dataset: xr.Dataset) -> xr.Dataset:
             for key, value in sanitized[variable_name].attrs.items()
             if key not in ZARR_SERIALIZATION_ATTRS
         }
+    return sanitized
+
+
+def sanitize_r0_dataset_attrs(dataset: xr.Dataset) -> xr.Dataset:
+    sanitized = dataset.copy()
+    sanitized.attrs = {
+        key: value
+        for key, value in sanitized.attrs.items()
+        if key not in R0_EXCLUDED_DATASET_ATTRS
+    }
     return sanitized
 
 
@@ -731,6 +746,7 @@ def build_r0_from_sources(
     result.attrs["time_coverage_start"] = str(timeseries["time"].min().values)[:10]
     result.attrs["time_coverage_end"] = str(timeseries["time"].max().values)[:10]
     result.attrs["build_status"] = "complete"
+    result = sanitize_r0_dataset_attrs(result)
 
     if resolved_r0_path is not None:
         resolved_r0_path.parent.mkdir(parents=True, exist_ok=True)
