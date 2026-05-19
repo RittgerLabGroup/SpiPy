@@ -88,18 +88,6 @@ def main(argv: list[str]) -> int:
         "execution_profile": execution_profile,
         "python_executable": python_exec,
     }
-    log_event(
-        logger,
-        "curc_submit_inversion_array",
-        stage="curc_submission",
-        event_type="start",
-        status="started",
-        submission_log_path=str(submission_log_path),
-        task_count=payload["task_count"],
-        array_spec=payload["array_spec"],
-        **common_fields,
-    )
-
     result: dict[str, object] = {
         "manifest_path": str(manifest_path),
         "report": rendered_report,
@@ -107,17 +95,6 @@ def main(argv: list[str]) -> int:
         "sbatch_command": sbatch_command,
         "submitted": False,
     }
-    log_event(
-        logger,
-        "curc_submit_inversion_array",
-        stage="curc_submission",
-        event_type="summary",
-        status="submission_preview_only",
-        task_count=payload["task_count"],
-        array_spec=payload["array_spec"],
-        sbatch_command=sbatch_command,
-        **common_fields,
-    )
 
     if submit:
         completed = subprocess.run(
@@ -135,6 +112,7 @@ def main(argv: list[str]) -> int:
             stage="curc_submission",
             event_type="submission",
             status="submitted",
+            scope=True,
             task_count=payload["task_count"],
             array_spec=payload["array_spec"],
             sbatch_command=sbatch_command,

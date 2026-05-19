@@ -249,10 +249,23 @@ git push
 - runtime/output behavior updates from this session also include:
   - inversion output naming now uses `{platform}_raw_output_{tile}_{YYYYMMDD}.nc`
   - default inversion masking behavior remains output-only (`valid_inversion_mask` persisted, science layers unmasked)
+- notebook-driven Slurm execution is now in place for targeted inversion reruns:
+  - the notebook can stage reflectance directly for a selected date subset
+  - the notebook can then submit and scan inversion-array jobs using the same CURC scripts used outside the notebook
+- five-day targeted validation for tile `h08v05` (`2023-03-16` through `2023-03-20`) was exercised:
+  - the first submission failed for four dates because only `2023-03-16` had been staged to scratch
+  - after staging the missing reflectance inputs, the five-date run executed successfully under the notebook-driven flow
+- log/output organization was revised again during this session:
+  - per-run logs now land under timestamped directories directly beneath `/scratch/alpine/ropa5718/spipy/logs/`
+  - inversion outputs now land under `/scratch/alpine/ropa5718/spipy/output/<sensor>/<platform>/<tile>/raw/wy<water_year>/`
+- aggregate/per-job log formatting was refined toward the edited target example:
+  - `curc_submit_inversion_array` now logs only the actual submission event
+  - the runtime context is rendered as a dedicated `SUBMISSION PARAMETERS` block
+  - scope separators now wrap runtime start/summary pairs and indentation depth is reduced by one level
 
 ### Next Step
 
-- rerun the single-date VIIRS SNPP inversion case (`h08v05`, `2023-03-16`, `r0_year=2022`) and inspect:
-  - per-job runtime log naming and separation
-  - water-year aggregate log readability and event nesting
-  - scanner behavior against new log paths
+- run the full VIIRS SNPP water year `2023` example for tile `h08v05` from the notebook:
+  - stage the full water-year reflectance set to scratch
+  - submit the full inversion array without the previous `%1` concurrency limit
+  - inspect scheduler behavior, runtime stability, and aggregate log readability at water-year scale

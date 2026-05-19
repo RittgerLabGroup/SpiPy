@@ -292,29 +292,48 @@ def execute_viirs_snpp_inversion_task(
         logger_name=_task_logger_name(context),
         mode="a",
         aggregate_log_path=aggregate_log_path,
+        log_to_stdout=False,
+        aggregate_show_separators=True,
     )
-    common_fields = {
-        "sensor": context.task.sensor,
+    preamble_fields = {
         "platform": context.task.platform,
         "tile": context.task.tile,
-        "water_year": context.task.water_year,
-        "date": context.task.date,
-        "r0_year": context.task.r0_year,
-        "manifest_path": context.manifest_path,
-        "task_index": context.task.task_index,
-        "retry_count": context.task.retry_count,
-        "output_dataset_path": context.output_dataset_path,
-        "log_path": str(runtime_log_path),
         "aggregate_log_path": str(aggregate_log_path),
+        "date": context.task.date,
+        "log_path": str(runtime_log_path),
+        "manifest_path": context.manifest_path,
+        "output_dataset_path": context.output_dataset_path,
+        "r0_year": context.task.r0_year,
+        "retry_count": context.task.retry_count,
+        "sensor": context.task.sensor,
+        **slurm_fields,
+        "task_index": context.task.task_index,
+        "water_year": context.task.water_year,
+    }
+    common_fields = {
+        "date": context.task.date,
         "dry_run": dry_run,
         **slurm_fields,
     }
+    log_event(
+        logger,
+        "curc_runtime_context",
+        stage="curc_runtime",
+        event_type="context",
+        status="ready",
+        title="SUBMISSION PARAMETERS",
+        scope=True,
+        **preamble_fields,
+    )
     log_event(
         logger,
         "curc_run_viirs_snpp_inversion_task",
         stage="curc_runtime",
         event_type="start",
         status="started",
+        scope=True,
+        task_index=context.task.task_index,
+        retry_count=context.task.retry_count,
         **common_fields,
     )
 
@@ -326,9 +345,12 @@ def execute_viirs_snpp_inversion_task(
             stage="curc_runtime",
             event_type="summary",
             status="loaded_existing",
+            scope=True,
             failure_code="none",
             retry_recommended=False,
             output_shape=list(existing["raw_viewable_snow_fraction"].shape),
+            task_index=context.task.task_index,
+            retry_count=context.task.retry_count,
             **common_fields,
         )
         existing.close()
@@ -348,13 +370,14 @@ def execute_viirs_snpp_inversion_task(
             stage="curc_runtime",
             event_type="summary",
             status=status,
+            scope=True,
             **failure_fields,
             staged_reflectance_paths=list(context.staged_reflectance_paths),
             r0_path=context.r0_path,
             lut_file=context.lut_file,
-            canopy_fraction_path=context.canopy_fraction_path,
-            ice_fraction_path=context.ice_fraction_path,
             missing_inputs=missing,
+            task_index=context.task.task_index,
+            retry_count=context.task.retry_count,
             **common_fields,
         )
         return {
@@ -396,13 +419,13 @@ def execute_viirs_snpp_inversion_task(
             stage="curc_runtime",
             event_type="summary",
             status="completed",
+            scope=True,
             failure_code="none",
             retry_recommended=False,
             output_shape=list(results["raw_viewable_snow_fraction"].shape),
-            staged_reflectance_paths=list(context.staged_reflectance_paths),
-            r0_path=context.r0_path,
-            lut_file=context.lut_file,
             output_path=str(written_path),
+            task_index=context.task.task_index,
+            retry_count=context.task.retry_count,
             **common_fields,
         )
         return {
@@ -420,7 +443,10 @@ def execute_viirs_snpp_inversion_task(
             stage="curc_runtime",
             event_type="summary",
             status="failed",
+            scope=True,
             **failure_fields,
+            task_index=context.task.task_index,
+            retry_count=context.task.retry_count,
             **common_fields,
         )
         raise

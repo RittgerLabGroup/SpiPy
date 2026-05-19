@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from workflows.curc.config import CurcWorkflowConfig
@@ -31,8 +32,8 @@ def output_tile_root(config: CurcWorkflowConfig, platform: str, tile: str) -> Pa
     return config.scratch_root / "output" / config.sensor / platform / tile
 
 
-def output_date_root(config: CurcWorkflowConfig, platform: str, tile: str, date_token: str) -> Path:
-    return output_tile_root(config, platform, tile) / date_token
+def output_raw_water_year_root(config: CurcWorkflowConfig, platform: str, tile: str, water_year: int) -> Path:
+    return output_tile_root(config, platform, tile) / "raw" / f"wy{water_year}"
 
 
 def log_root(config: CurcWorkflowConfig) -> Path:
@@ -41,3 +42,10 @@ def log_root(config: CurcWorkflowConfig) -> Path:
 
 def job_log_dir(config: CurcWorkflowConfig, platform: str, tile: str, year: int) -> Path:
     return log_root(config)
+
+
+def timestamped_log_dir(config: CurcWorkflowConfig, *, timestamp: str | None = None) -> Path:
+    """Return a top-level timestamped log directory for one workflow execution."""
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return log_root(config) / timestamp
