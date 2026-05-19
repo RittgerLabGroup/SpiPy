@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 import json
 from pathlib import Path
 import subprocess
@@ -19,6 +20,7 @@ from workflows.curc.slurm import (
     render_sbatch_command_for_array_payload,
 )
 from workflows.curc.status import scan_inversion_array_status, should_auto_retry, write_retry_manifest
+from workflows.curc.task_manifest import load_inversion_array_manifest
 
 
 def main(argv: list[str]) -> int:
@@ -58,11 +60,15 @@ def main(argv: list[str]) -> int:
             raise ValueError(f"Unexpected argument: {token}")
         i += 1
 
-    auto_retry_log_path = manifest_path.parent / (manifest_path.stem + "_auto_retry.log")
+    manifest_payload = load_inversion_array_manifest(manifest_path)
+    aggregate_log_path = manifest_path.parent / f"run_inversion_wy{manifest_payload['water_year']}_aggregate.log"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    auto_retry_log_path = manifest_path.parent / (manifest_path.stem + f"_auto_retry_{timestamp}.log")
     logger = configure_spires_file_logger(
         auto_retry_log_path,
         logger_name=f"spires.curc.auto_retry.{manifest_path.stem}",
         mode="a",
+        aggregate_log_path=aggregate_log_path,
     )
 
     report = scan_inversion_array_status(manifest_path)
@@ -71,6 +77,10 @@ def main(argv: list[str]) -> int:
     common_fields = {
         "manifest_path": str(manifest_path),
         "job_name": manifest_path.stem,
+        "sensor": manifest_payload["sensor"],
+        "platform": manifest_payload["platform"],
+        "tile": manifest_payload["tile"],
+        "water_year": manifest_payload["water_year"],
         "submission_kind": "auto_retry",
         "retry_all_failed": not retry_only,
         "execution_profile": execution_profile,

@@ -14,5 +14,7 @@ CONFIG = CurcWorkflowConfig(
     years=(2024,),
     date_glob="*",
     dry_run=True,
+    apply_valid_inversion_mask=False,
+    use_grouping=True,
+    grouping_method="chunk_bin_mean",
 )
-

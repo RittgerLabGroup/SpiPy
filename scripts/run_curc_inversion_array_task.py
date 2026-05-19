@@ -19,7 +19,9 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
             "usage: run_curc_inversion_array_task.py <manifest.json> [task_index] "
-            "[--execute] [--overwrite] [--lut-file <path>] [--execution-profile <name>]",
+            "[--execute] [--overwrite] [--lut-file <path>] [--execution-profile <name>] "
+            "[--apply-valid-inversion-mask <true|false>] [--use-grouping <true|false>] "
+            "[--grouping-method <name>]",
             file=sys.stderr,
         )
         return 2
@@ -30,6 +32,9 @@ def main(argv: list[str]) -> int:
     overwrite = False
     lut_file = None
     execution_profile = "cluster"
+    apply_valid_inversion_mask = None
+    use_grouping = None
+    grouping_method = None
 
     i = 2
     while i < len(argv):
@@ -44,6 +49,15 @@ def main(argv: list[str]) -> int:
         elif token == "--execution-profile":
             i += 1
             execution_profile = argv[i]
+        elif token == "--apply-valid-inversion-mask":
+            i += 1
+            apply_valid_inversion_mask = argv[i].strip().lower() in {"1", "true", "yes", "y"}
+        elif token == "--use-grouping":
+            i += 1
+            use_grouping = argv[i].strip().lower() in {"1", "true", "yes", "y"}
+        elif token == "--grouping-method":
+            i += 1
+            grouping_method = argv[i]
         elif task_index is None:
             task_index = int(token)
         else:
@@ -57,6 +71,9 @@ def main(argv: list[str]) -> int:
         execution_profile=execution_profile,
         overwrite=overwrite,
         dry_run=not execute,
+        apply_valid_inversion_mask=apply_valid_inversion_mask,
+        use_grouping=use_grouping,
+        grouping_method=grouping_method,
     )
     rendered = asdict(context) if is_dataclass(context) else context
     print(json.dumps(rendered, indent=2))

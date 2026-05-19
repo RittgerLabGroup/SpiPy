@@ -40,4 +40,4 @@ def log_root(config: CurcWorkflowConfig) -> Path:
 
 
 def job_log_dir(config: CurcWorkflowConfig, platform: str, tile: str, year: int) -> Path:
-    return log_root(config) / config.sensor / platform / tile / str(year)
+    return log_root(config)

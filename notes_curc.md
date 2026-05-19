@@ -80,6 +80,12 @@ module load miniforge
 mamba run -n spipy14 <command>
 ```
 
+Python rule for this server:
+
+- never use `python3` directly in shell commands for this repo
+- always run Python via the project environment:
+  - `module load miniforge && mamba run -n spipy14 python <...>`
+
 ## Git / GitHub Notes
 
 - this server now authenticates to GitHub over SSH using `~/.ssh/curc`
@@ -229,3 +235,24 @@ git push
 - later workflow gap to close:
   - bring in albedo functionality from `ParBal` and `LookupFunctionsSPIReS`
   - current CURC-side VIIRS runtime/output path does not yet include that functionality
+
+## Session Update (2026-05-19)
+
+- CURC logging behavior was overhauled to improve traceability and reduce collisions:
+  - runtime task logs now support per-job naming (`run_inversion_<date>_job<SLURM_JOB_ID>.log`) so separate submissions do not append into a single date log
+  - near-real-time water-year aggregate log writing is now wired (`run_inversion_wy<year>_aggregate.log`)
+  - hierarchical visual indentation was added via context-aware formatting to make parent/child event flow easier to scan
+  - submission and auto-retry orchestration logs now include timestamps in filenames to avoid reuse collisions
+  - scanner logic now prefers newest job-specific logs and falls back to legacy per-date logs
+- log placement was simplified for new runs:
+  - CURC job logs now resolve to the top-level `/scratch/alpine/ropa5718/spipy/logs/` directory instead of nested sensor/platform/tile/year folders
+- runtime/output behavior updates from this session also include:
+  - inversion output naming now uses `{platform}_raw_output_{tile}_{YYYYMMDD}.nc`
+  - default inversion masking behavior remains output-only (`valid_inversion_mask` persisted, science layers unmasked)
+
+### Next Step
+
+- rerun the single-date VIIRS SNPP inversion case (`h08v05`, `2023-03-16`, `r0_year=2022`) and inspect:
+  - per-job runtime log naming and separation
+  - water-year aggregate log readability and event nesting
+  - scanner behavior against new log paths

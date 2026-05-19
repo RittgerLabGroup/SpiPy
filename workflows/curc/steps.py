@@ -64,6 +64,9 @@ class SlurmArrayPlan:
     array_indices: tuple[int, ...]
     max_concurrent_tasks: int | None
     max_auto_retry_count: int
+    apply_valid_inversion_mask: bool
+    use_grouping: bool
+    grouping_method: str
     tasks: tuple[InversionTaskPlan, ...]
     slurm_profile: SlurmProfile
     notes: tuple[str, ...] = ()

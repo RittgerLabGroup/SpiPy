@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import logging
 from pathlib import Path
+import threading
 from typing import Any
 
 
@@ -42,6 +43,7 @@ _VISUAL_LOG_PREFIX_BY_EVENT_TYPE = {
     "summary": "====== SUMMARY ======",
     "submission": "====== SUBMISSION ======",
 }
+_FIELD_RE = __import__("re").compile(r'([A-Za-z0-9_]+)=(".*?"|\{.*?\}|\[.*?\]|[^ ]+)')
 
 
 def _serialize_log_value(value: Any) -> str:
@@ -69,16 +71,79 @@ def format_log_event(event: str, **fields: Any) -> str:
 
 def log_event(logger: logging.Logger, event: str, level: int = logging.INFO, **fields: Any) -> None:
     """Emit a structured event on the provided logger."""
-    logger.log(level, format_log_event(event, **fields))
+    logger.log(
+        level,
+        format_log_event(event, **fields),
+        extra={
+            "_spires_event": event,
+            "_spires_event_type": fields.get("event_type"),
+            "_spires_parent_event": fields.get("parent_event"),
+        },
+    )
 
 
 class _SPIRESLogFormatter(logging.Formatter):
     """Formatter that adds a bare separator line before highlighted records."""
 
+    _lock = threading.Lock()
+    _depth_by_logger: dict[str, int] = {}
+    _scope_stack_by_logger: dict[str, list[str]] = {}
+
+    @staticmethod
+    def _parse_structured_message(message: str) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, raw_value in _FIELD_RE.findall(message):
+            try:
+                result[key] = json.loads(raw_value)
+            except json.JSONDecodeError:
+                result[key] = raw_value
+        return result
+
     def format(self, record: logging.LogRecord) -> str:
-        formatted = super().format(record)
+        logger_key = record.name
+        event = getattr(record, "_spires_event", None)
+        event_type = getattr(record, "_spires_event_type", None)
+        parent_event = getattr(record, "_spires_parent_event", None)
+        if event is None or event_type is None:
+            parsed = self._parse_structured_message(record.getMessage())
+            event = parsed.get("event")
+            event_type = parsed.get("event_type")
+            parent_event = parsed.get("parent_event")
+
+        with self._lock:
+            depth = self._depth_by_logger.get(logger_key, 0)
+            stack = self._scope_stack_by_logger.get(logger_key, [])
+
+            if parent_event:
+                try:
+                    parent_depth = stack.index(str(parent_event)) + 1
+                    depth = max(depth, parent_depth)
+                except ValueError:
+                    pass
+
+            record.msg = f"{'    ' * max(depth, 0)}{record.getMessage()}"
+            record.args = ()
+            formatted = super().format(record)
+
+            if event_type == "start" and event is not None:
+                stack.append(str(event))
+                self._scope_stack_by_logger[logger_key] = stack
+                self._depth_by_logger[logger_key] = depth + 1
+            elif event_type in {"summary", "submission"} and event is not None:
+                if stack:
+                    try:
+                        idx = len(stack) - 1 - stack[::-1].index(str(event))
+                        stack = stack[:idx]
+                    except ValueError:
+                        stack = stack[:-1]
+                self._scope_stack_by_logger[logger_key] = stack
+                self._depth_by_logger[logger_key] = len(stack)
+            else:
+                self._scope_stack_by_logger[logger_key] = stack
+                self._depth_by_logger[logger_key] = depth
+
         visual_prefix = next(
-            (prefix for prefix in _VISUAL_LOG_PREFIX_BY_EVENT_TYPE.values() if record.getMessage().startswith(prefix)),
+            (prefix for prefix in _VISUAL_LOG_PREFIX_BY_EVENT_TYPE.values() if record.getMessage().lstrip().startswith(prefix)),
             None,
         )
         if visual_prefix is None:
@@ -97,6 +162,8 @@ def configure_spires_file_logger(
     level: int = logging.INFO,
     log_to_stdout: bool = True,
     mode: str = "w",
+    aggregate_log_path: str | Path | None = None,
+    enable_context_indentation: bool = True,
 ) -> logging.Logger:
     """
     Configure a plain-text SPIRES logger suitable for `.log` or `.txt` files.
@@ -111,7 +178,8 @@ def configure_spires_file_logger(
     resolved_log_path = Path(log_path).expanduser().resolve()
     resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    formatter = _SPIRESLogFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    formatter_class = _SPIRESLogFormatter if enable_context_indentation else logging.Formatter
+    formatter = formatter_class("%(asctime)s %(levelname)s %(name)s %(message)s")
 
     logger.handlers.clear()
 
@@ -119,6 +187,14 @@ def configure_spires_file_logger(
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+    if aggregate_log_path is not None:
+        resolved_aggregate_path = Path(aggregate_log_path).expanduser().resolve()
+        resolved_aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+        aggregate_handler = logging.FileHandler(resolved_aggregate_path, mode="a")
+        aggregate_handler.setLevel(level)
+        aggregate_handler.setFormatter(formatter)
+        logger.addHandler(aggregate_handler)
 
     if log_to_stdout:
         stream_handler = logging.StreamHandler()

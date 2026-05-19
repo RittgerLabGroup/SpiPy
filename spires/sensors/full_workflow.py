@@ -334,8 +334,10 @@ def resolve_valid_mask_application(
     apply_valid_inversion_mask: bool | None,
     mask_with_valid_inversion_mask: bool | None,
 ) -> bool:
+    # Default behavior: keep science layers unmasked and persist
+    # valid_inversion_mask for downstream visualization/filtering.
     if apply_valid_inversion_mask is None and mask_with_valid_inversion_mask is None:
-        return True
+        return False
     if apply_valid_inversion_mask is None:
         return bool(mask_with_valid_inversion_mask)
     if mask_with_valid_inversion_mask is None:
@@ -411,7 +413,7 @@ def run_sensor_inversion(
     max_eval: int = 100,
     x0: np.ndarray | None = None,
     algorithm: int = 2,
-    use_grouping: bool = False,
+    use_grouping: bool = True,
     grouping_method: str = "chunk_bin_mean",
     grouping_tolerance: float | np.ndarray = 0.02,
     grouping_reflectance_tol: float | np.ndarray | None = None,
@@ -557,6 +559,16 @@ def run_sensor_inversion(
     if profile is not None:
         results.attrs["execution_profile"] = profile.name
     results = copy_spatial_metadata_fn(scene_ds, results)
+    for attr_name in (
+        "units_by_band",
+        "long_name",
+        "processing_timestamp",
+        "grid_name",
+        "GeoTransform",
+        "upper_left_point_meters",
+        "lower_right_meters",
+    ):
+        results.attrs.pop(attr_name, None)
     results = sanitize_netcdf_dataset(results)
 
     log_event(

@@ -194,6 +194,9 @@ def plan_viirs_snpp_inversion_array(
         array_indices=tuple(task.task_index for task in tasks),
         max_concurrent_tasks=max_concurrent_tasks,
         max_auto_retry_count=canonical.max_auto_retry_count,
+        apply_valid_inversion_mask=canonical.apply_valid_inversion_mask,
+        use_grouping=canonical.use_grouping,
+        grouping_method=canonical.grouping_method,
         tasks=tuple(tasks),
         slurm_profile=canonical.slurm_profile,
         notes=(

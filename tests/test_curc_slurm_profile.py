@@ -21,6 +21,9 @@ def test_manifest_round_trip_preserves_slurm_profile(tmp_path: Path) -> None:
         array_indices=(0,),
         max_concurrent_tasks=1,
         max_auto_retry_count=3,
+        apply_valid_inversion_mask=False,
+        use_grouping=True,
+        grouping_method="chunk_bin_mean",
         tasks=(
             InversionTaskPlan(
                 task_index=0,
@@ -61,6 +64,9 @@ def test_manifest_round_trip_preserves_slurm_profile(tmp_path: Path) -> None:
         "output_dir": str(tmp_path / "slurm_out"),
         "extra_args": ["--mail-type=FAIL"],
     }
+    assert payload["apply_valid_inversion_mask"] is False
+    assert payload["use_grouping"] is True
+    assert payload["grouping_method"] == "chunk_bin_mean"
 
 
 def test_render_sbatch_command_uses_profile_and_cli_overrides(tmp_path: Path) -> None:

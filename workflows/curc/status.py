@@ -17,6 +17,13 @@ SUMMARY_EVENT_NAME = "curc_run_viirs_snpp_inversion_task"
 _FIELD_RE = re.compile(r'([A-Za-z0-9_]+)=(".*?"|\{.*?\}|\[.*?\]|[^ ]+)')
 
 
+def _inversion_output_dataset_path(task: InversionTaskPlan) -> Path:
+    date_token = task.date.replace("-", "")
+    preferred = Path(task.output_path).expanduser().resolve() / f"{task.platform}_raw_output_{task.tile}_{date_token}.nc"
+    legacy = Path(task.output_path).expanduser().resolve() / "inversion.nc"
+    return preferred if preferred.exists() or not legacy.exists() else legacy
+
+
 @dataclass(frozen=True)
 class InversionTaskStatus:
     """Observed status for one logical inversion task."""
@@ -82,11 +89,23 @@ def _latest_summary_event(log_path: Path) -> dict[str, Any] | None:
     return latest
 
 
+def _resolve_task_log_path(task: InversionTaskPlan) -> Path:
+    base = Path(task.log_path).expanduser().resolve()
+    candidates = sorted(
+        base.parent.glob(f"{base.stem}_job*{base.suffix}"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    return base
+
+
 def _status_from_task(task: InversionTaskPlan, *, max_auto_retry_count: int) -> InversionTaskStatus:
-    output_dataset_path = Path(task.output_path).expanduser().resolve() / "inversion.nc"
+    output_dataset_path = _inversion_output_dataset_path(task)
     output_exists = output_dataset_path.exists()
     output_valid = load_output_dataset_if_valid(output_dataset_path) is not None if output_exists else False
-    log_path = Path(task.log_path).expanduser().resolve()
+    log_path = _resolve_task_log_path(task)
     summary = _latest_summary_event(log_path)
 
     if output_valid:

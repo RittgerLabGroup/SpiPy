@@ -16,7 +16,7 @@ import xarray as xr
 from workflows.curc.config import CurcWorkflowConfig
 from workflows.curc.paths import r0_dataset_path
 from workflows.curc.steps import InversionTaskPlan
-from workflows.curc.task_manifest import resolve_inversion_task_from_manifest
+from workflows.curc.task_manifest import load_inversion_array_manifest, resolve_inversion_task_from_manifest
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,29 @@ def slurm_metadata_from_env() -> dict[str, object]:
     return metadata
 
 
+def _inversion_output_filename(task: InversionTaskPlan) -> str:
+    date_token = task.date.replace("-", "")
+    return f"{task.platform}_raw_output_{task.tile}_{date_token}.nc"
+
+
+def _inversion_output_dataset_path(task: InversionTaskPlan) -> Path:
+    return Path(task.output_path).expanduser().resolve() / _inversion_output_filename(task)
+
+
+def resolve_runtime_task_log_path(task: InversionTaskPlan, *, slurm_job_id: str | None = None) -> Path:
+    """Resolve runtime log path and add a per-job suffix when available."""
+    base = Path(task.log_path).expanduser().resolve()
+    if slurm_job_id is None:
+        return base
+    return base.with_name(f"{base.stem}_job{slurm_job_id}{base.suffix}")
+
+
+def resolve_water_year_aggregate_log_path(task: InversionTaskPlan) -> Path:
+    """Return near-real-time aggregate water-year runtime log path for one task."""
+    base = Path(task.log_path).expanduser().resolve()
+    return base.parent / f"run_inversion_wy{task.water_year}_aggregate.log"
+
+
 def _has_slurm_context(slurm_fields: dict[str, object]) -> bool:
     return any(key in slurm_fields for key in ("slurm_job_id", "slurm_array_job_id", "slurm_array_task_id"))
 
@@ -156,7 +179,7 @@ def build_viirs_snpp_inversion_runtime_context(
         ice_fraction_path=str(ice_fraction_path) if ice_fraction_path is not None else None,
         lut_file=str(resolved_lut_file),
         output_path=task.output_path,
-        output_dataset_path=str(Path(task.output_path).expanduser().resolve() / "inversion.nc"),
+        output_dataset_path=str(_inversion_output_dataset_path(task)),
         log_path=task.log_path,
     )
 
@@ -248,6 +271,9 @@ def execute_viirs_snpp_inversion_task(
     execution_profile: str = "cluster",
     overwrite: bool = False,
     dry_run: bool = True,
+    apply_valid_inversion_mask: bool | None = None,
+    use_grouping: bool | None = None,
+    grouping_method: str | None = None,
 ) -> dict[str, Any]:
     """Execute or dry-run one manifest-backed VIIRS SNPP inversion task."""
     context = build_viirs_snpp_inversion_runtime_context(
@@ -255,12 +281,18 @@ def execute_viirs_snpp_inversion_task(
         task_index=task_index,
         lut_file=lut_file,
     )
+    slurm_fields = slurm_metadata_from_env()
+    runtime_log_path = resolve_runtime_task_log_path(
+        context.task,
+        slurm_job_id=None if slurm_fields.get("slurm_job_id") is None else str(slurm_fields["slurm_job_id"]),
+    )
+    aggregate_log_path = resolve_water_year_aggregate_log_path(context.task)
     logger = configure_spires_file_logger(
-        context.log_path,
+        runtime_log_path,
         logger_name=_task_logger_name(context),
         mode="a",
+        aggregate_log_path=aggregate_log_path,
     )
-    slurm_fields = slurm_metadata_from_env()
     common_fields = {
         "sensor": context.task.sensor,
         "platform": context.task.platform,
@@ -272,7 +304,8 @@ def execute_viirs_snpp_inversion_task(
         "task_index": context.task.task_index,
         "retry_count": context.task.retry_count,
         "output_dataset_path": context.output_dataset_path,
-        "log_path": context.log_path,
+        "log_path": str(runtime_log_path),
+        "aggregate_log_path": str(aggregate_log_path),
         "dry_run": dry_run,
         **slurm_fields,
     }
@@ -332,12 +365,19 @@ def execute_viirs_snpp_inversion_task(
         }
 
     validate_viirs_snpp_runtime_context(context)
+    manifest_payload = load_inversion_array_manifest(context.manifest_path)
+    manifest_apply_valid_mask = bool(manifest_payload.get("apply_valid_inversion_mask", False))
+    manifest_use_grouping = bool(manifest_payload.get("use_grouping", True))
+    manifest_grouping_method = str(manifest_payload.get("grouping_method", "chunk_bin_mean"))
 
     try:
         run_kwargs: dict[str, Any] = {
             "lut_file": context.lut_file,
             "execution_profile": execution_profile,
             "logger": logger,
+            "apply_valid_inversion_mask": manifest_apply_valid_mask if apply_valid_inversion_mask is None else apply_valid_inversion_mask,
+            "use_grouping": manifest_use_grouping if use_grouping is None else use_grouping,
+            "grouping_method": manifest_grouping_method if grouping_method is None else grouping_method,
         }
         if context.canopy_fraction_path is not None:
             run_kwargs["canopy_fraction"] = context.canopy_fraction_path

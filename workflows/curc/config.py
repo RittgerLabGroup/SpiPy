@@ -64,6 +64,9 @@ class CurcWorkflowConfig:
     date_glob: str = "*"
     dry_run: bool = True
     max_auto_retry_count: int = 3
+    apply_valid_inversion_mask: bool = False
+    use_grouping: bool = True
+    grouping_method: str = "chunk_bin_mean"
     slurm_profile: SlurmProfile = field(default_factory=SlurmProfile)
 
     def canonicalized(self) -> "CurcWorkflowConfig":
@@ -82,5 +85,8 @@ class CurcWorkflowConfig:
             date_glob=self.date_glob,
             dry_run=self.dry_run,
             max_auto_retry_count=self.max_auto_retry_count,
+            apply_valid_inversion_mask=self.apply_valid_inversion_mask,
+            use_grouping=self.use_grouping,
+            grouping_method=self.grouping_method,
             slurm_profile=self.slurm_profile,
         )

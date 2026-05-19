@@ -71,7 +71,7 @@ def run_viirs_inversion(
     max_eval: int = 100,
     x0=None,
     algorithm: int = 2,
-    use_grouping: bool = False,
+    use_grouping: bool = True,
     grouping_method: str = "chunk_bin_mean",
     grouping_tolerance=0.02,
     grouping_reflectance_tol=None,

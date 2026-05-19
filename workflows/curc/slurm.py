@@ -36,6 +36,9 @@ def render_array_submission_payload(
         "array_indices": list(plan.array_indices),
         "max_concurrent_tasks": plan.max_concurrent_tasks,
         "max_auto_retry_count": plan.max_auto_retry_count,
+        "apply_valid_inversion_mask": plan.apply_valid_inversion_mask,
+        "use_grouping": plan.use_grouping,
+        "grouping_method": plan.grouping_method,
         "notes": list(plan.notes),
         "r0_year": plan.r0_year,
         "slurm_profile": plan.slurm_profile.to_payload(),
@@ -77,6 +80,9 @@ def render_array_submission_payload_from_manifest(manifest_path: str | Path) -> 
         "array_indices": list(array_indices),
         "max_concurrent_tasks": max_concurrent_tasks,
         "max_auto_retry_count": payload.get("max_auto_retry_count", 3),
+        "apply_valid_inversion_mask": bool(payload.get("apply_valid_inversion_mask", False)),
+        "use_grouping": bool(payload.get("use_grouping", True)),
+        "grouping_method": str(payload.get("grouping_method", "chunk_bin_mean")),
         "r0_year": payload.get("r0_year"),
         "manifest_path": str(Path(manifest_path).expanduser().resolve()),
         "array_spec": array_spec,
@@ -107,6 +113,12 @@ def render_sbatch_command_for_array_payload(
             "--execute",
             "--execution-profile",
             shlex.quote(str(execution_profile)),
+            "--apply-valid-inversion-mask",
+            str(bool(payload.get("apply_valid_inversion_mask", False))).lower(),
+            "--use-grouping",
+            str(bool(payload.get("use_grouping", True))).lower(),
+            "--grouping-method",
+            shlex.quote(str(payload.get("grouping_method", "chunk_bin_mean"))),
         ]
     )
     slurm_args: list[str] = []

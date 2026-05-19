@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 import json
 from pathlib import Path
 import subprocess
@@ -19,6 +20,7 @@ from workflows.curc.slurm import (
     render_sbatch_command_for_array_payload,
 )
 from workflows.curc.status import scan_inversion_array_status
+from workflows.curc.task_manifest import load_inversion_array_manifest
 
 
 def main(argv: list[str]) -> int:
@@ -54,11 +56,15 @@ def main(argv: list[str]) -> int:
             raise ValueError(f"Unexpected argument: {token}")
         i += 1
 
-    submission_log_path = manifest_path.parent / (manifest_path.stem + "_initial_submission.log")
+    manifest_payload = load_inversion_array_manifest(manifest_path)
+    aggregate_log_path = manifest_path.parent / f"run_inversion_wy{manifest_payload['water_year']}_aggregate.log"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    submission_log_path = manifest_path.parent / (manifest_path.stem + f"_initial_submission_{timestamp}.log")
     logger = configure_spires_file_logger(
         submission_log_path,
         logger_name=f"spires.curc.initial_submission.{manifest_path.stem}",
         mode="a",
+        aggregate_log_path=aggregate_log_path,
     )
 
     report = scan_inversion_array_status(manifest_path)
@@ -74,6 +80,10 @@ def main(argv: list[str]) -> int:
     common_fields = {
         "manifest_path": str(manifest_path),
         "job_name": payload["job_name"],
+        "sensor": payload["sensor"],
+        "platform": payload["platform"],
+        "tile": payload["tile"],
+        "water_year": payload["water_year"],
         "submission_kind": "initial",
         "execution_profile": execution_profile,
         "python_executable": python_exec,
