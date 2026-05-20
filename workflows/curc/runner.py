@@ -108,6 +108,8 @@ def preview_viirs_snpp_step_execution(
     r0_year: int | None = None,
     rsync_executable: str = "rsync",
     lut_file: str | None = None,
+    zarr_path: str | None = None,
+    chunks: dict[str, int] | None = None,
     overwrite: bool = False,
     show_progress: bool = False,
 ):
@@ -125,6 +127,8 @@ def preview_viirs_snpp_step_execution(
         step_plan,
         rsync_executable=rsync_executable,
         lut_file=lut_file,
+        zarr_path=zarr_path,
+        chunks=chunks,
         overwrite=overwrite,
         show_progress=show_progress,
     )
@@ -141,6 +145,8 @@ def run_viirs_snpp_step(
     execute: bool = False,
     rsync_executable: str = "rsync",
     lut_file: str | None = None,
+    zarr_path: str | None = None,
+    chunks: dict[str, int] | None = None,
     overwrite: bool = False,
     show_progress: bool = False,
 ):
@@ -159,6 +165,8 @@ def run_viirs_snpp_step(
         execute=execute,
         rsync_executable=rsync_executable,
         lut_file=lut_file,
+        zarr_path=zarr_path,
+        chunks=chunks,
         overwrite=overwrite,
         show_progress=show_progress,
     )

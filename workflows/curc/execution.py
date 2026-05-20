@@ -88,6 +88,8 @@ def preview_viirs_snpp_workflow_step_execution(
     *,
     rsync_executable: str = "rsync",
     lut_file: str | Path | None = None,
+    zarr_path: str | Path | None = None,
+    chunks: dict[str, int] | None = None,
     overwrite: bool = False,
     show_progress: bool = False,
 ) -> dict[str, object]:
@@ -130,9 +132,12 @@ def preview_viirs_snpp_workflow_step_execution(
     if step_plan.step == "build_r0":
         resolved_lut_file = default_viirs_lut_file(step_plan.platform) if lut_file is None else Path(lut_file)
         output_dataset_path = _build_r0_output_dataset_path(config, step_plan)
+        resolved_zarr_path = None if zarr_path is None else Path(zarr_path).expanduser().resolve()
         result["mode"] = "python_r0_builder"
         result["output_dataset_path"] = str(output_dataset_path)
         result["lut_file"] = str(resolved_lut_file.expanduser().resolve())
+        result["zarr_path"] = None if resolved_zarr_path is None else str(resolved_zarr_path)
+        result["chunks"] = None if chunks is None else dict(chunks)
         result["show_progress"] = show_progress
         return result
 
@@ -151,6 +156,8 @@ def execute_viirs_snpp_workflow_step(
     execute: bool = False,
     rsync_executable: str = "rsync",
     lut_file: str | Path | None = None,
+    zarr_path: str | Path | None = None,
+    chunks: dict[str, int] | None = None,
     overwrite: bool = False,
     show_progress: bool = False,
 ) -> dict[str, object]:
@@ -160,6 +167,8 @@ def execute_viirs_snpp_workflow_step(
         step_plan,
         rsync_executable=rsync_executable,
         lut_file=lut_file,
+        zarr_path=zarr_path,
+        chunks=chunks,
         overwrite=overwrite,
         show_progress=show_progress,
     )
@@ -203,6 +212,8 @@ def execute_viirs_snpp_workflow_step(
             r0_path=output_dataset_path,
             overwrite=overwrite,
             lut_file=resolved_lut_file,
+            zarr_path=zarr_path,
+            chunks=chunks,
             show_progress=show_progress,
         )
         preview["executed"] = True

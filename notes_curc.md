@@ -285,3 +285,55 @@ git push
   - confirm `run_inversion_wy2023_task_attempts.csv` and `run_inversion_wy2023_summary.txt` are easy to use from the notebook
   - verify the top-level timestamped directory stays uncluttered while `detailed_logs/` retains the full forensic trail
   - decide whether the legacy aggregate `.log` should be retained, reduced further, or removed from the default workflow once the CSV/TXT summaries are proven sufficient
+
+## Session Update (2026-05-20)
+
+- the CURC sensor workflow notebook was retargeted from the old single-tile `WY2023` example to a first-run `WY2024` `VNP09GA` planning/submission flow:
+  - notebook path: `examples/12_curc_sensor_workflow_planning.ipynb`
+  - current default tile set is:
+    - `h08v04`
+    - `h08v05`
+    - `h09v04`
+    - `h09v05`
+    - `h10v04`
+  - current default source root remains `/pl/active/rittger_ops/vnp09ga.002`
+- the notebook now orchestrates the existing single-tile CURC helpers sequentially across that tile set:
+  - per-tile discovery
+  - per-tile workflow-step planning
+  - per-tile manifest creation/submission/scanning
+- notebook output volume was reduced after the first multi-tile pass proved too heavy for interactive use:
+  - preview and execution helper cells now print compact summaries instead of full `dates` / `source_paths` payloads
+  - array planning, submission, and scan cells now also print compact summaries
+- the first multi-tile notebook `build_r0` attempt crashed the kernel while processing tile `h08v04`
+  - scratch inspection showed `/scratch/alpine/ropa5718/spipy/input/viirs/snpp/ancillary/r0/h08v04/2023/` existed but was empty
+  - no `snpp_r0_h08v04_2023.nc` artifact was found anywhere under `/scratch/alpine/ropa5718/spipy`
+  - this strongly suggested the crash happened before the final atomic NetCDF rename completed, not after a successful `R0` write
+- as an immediate notebook-side safeguard, `build_r0` was restricted to one tile at a time:
+  - notebook flag: `R0_BUILD_TILE`
+  - `stage_reflectance` and `stage_ancillary` can still iterate across all configured tiles
+- more importantly, the lower-memory `R0` path that already existed in the sensor layer was now exposed through the CURC helper layer:
+  - `workflows/curc/execution.py` now accepts optional `zarr_path` and `chunks` for the `build_r0` step preview/execute path
+  - `workflows/curc/runner.py` now exposes those same options through:
+    - `preview_viirs_snpp_step_execution(...)`
+    - `run_viirs_snpp_step(...)`
+  - the underlying sensor-layer behavior already supported incremental `Zarr` staging and was not invented in this session; this session connected that capability to the CURC workflow entrypoints
+- the notebook now uses that new CURC `Zarr` passthrough for `build_r0`:
+  - preview flag/control:
+    - `R0_USE_ZARR = True`
+    - `R0_ZARR_CHUNKS = {"time": 1, "y": 256, "x": 256, "band": -1}`
+  - execution flag/control:
+    - `R0_BUILD_USE_ZARR = True`
+    - `R0_BUILD_CHUNKS = {"time": 1, "y": 256, "x": 256, "band": -1}`
+  - per-tile temporary stacks are currently directed under:
+    - `/scratch/alpine/ropa5718/spipy/tmp/r0_zarr/`
+- focused CURC execution coverage was extended to lock in this new behavior:
+  - `tests/test_curc_execution.py` now checks that `build_r0` preview payloads include `zarr_path` / `chunks`
+  - the same test module now checks that `execute_viirs_snpp_workflow_step(...)` passes `zarr_path` / `chunks` through to `build_r0_from_sources(...)`
+- validated command from this session:
+  - `module load miniforge && mamba run -n spipy14 python -m pytest -q tests/test_curc_execution.py`
+  - result: `5 passed`
+
+### Immediate Next Step
+
+- rerun the notebook `build_r0` cell for a single tile using the new CURC `Zarr` path before broadening the tile set
+- if that succeeds cleanly on real `WY2024` data, revisit whether the notebook still needs a single-tile `R0_BUILD_TILE` guard or can be relaxed to a small tile subset
