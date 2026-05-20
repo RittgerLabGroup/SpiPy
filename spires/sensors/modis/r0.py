@@ -27,6 +27,7 @@ MODIS_R0_BLUE_BAND = "3"
 MODIS_R0_STAGING_VARIABLES = (
     "reflectance",
     "sensor_zenith",
+    "sensor_azimuth",
     "valid_r0_mask",
 )
 LOGGER = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ def build_modis_r0(
     *,
     logger: logging.Logger | None = None,
     max_sensor_zenith: float = 30.0,
+    ndvi_tie_epsilon: float = 0.02,
     ndvi_red_band: str = MODIS_R0_NDVI_RED_BAND,
     ndvi_nir_band: str = MODIS_R0_NDVI_NIR_BAND,
     ndsi_visible_band: str = MODIS_R0_NDSI_VISIBLE_BAND,
@@ -108,6 +110,7 @@ def build_modis_r0(
         logger=logger or LOGGER,
         event_name="build_modis_r0",
         max_sensor_zenith=max_sensor_zenith,
+        ndvi_tie_epsilon=ndvi_tie_epsilon,
         ndvi_red_band=ndvi_red_band,
         ndvi_nir_band=ndvi_nir_band,
         ndsi_visible_band=ndsi_visible_band,
@@ -162,6 +165,7 @@ def build_modis_r0_from_sources(
     show_progress: bool = False,
     progress_desc: str = "Building MODIS R0",
     max_sensor_zenith: float = 30.0,
+    ndvi_tie_epsilon: float = 0.02,
     zarr_path: str | Path | None = None,
     zarr_mode: str = "w",
     chunks: dict[str, int] | None = None,
@@ -183,6 +187,7 @@ def build_modis_r0_from_sources(
         show_progress=show_progress,
         progress_desc=progress_desc,
         max_sensor_zenith=max_sensor_zenith,
+        ndvi_tie_epsilon=ndvi_tie_epsilon,
         zarr_path=zarr_path,
         zarr_mode=zarr_mode,
         chunks=chunks,

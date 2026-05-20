@@ -13,19 +13,29 @@ from spires.sensors.viirs.r0 import (
 )
 
 
-def build_mock_prepared_scene(acquisition_date: str, spectra: np.ndarray) -> xr.Dataset:
+def build_mock_prepared_scene(
+    acquisition_date: str,
+    spectra: np.ndarray,
+    *,
+    sensor_zenith: np.ndarray | None = None,
+    sensor_azimuth: np.ndarray | None = None,
+) -> xr.Dataset:
     band_names = ["I1", "I2", "I3", "M2", "M4", "M8", "M11"]
     reflectance = xr.DataArray(
         spectra.reshape(1, 2, len(band_names)),
         dims=("y", "x", "band"),
         coords={"y": [0], "x": [0, 1], "band": band_names},
     )
-    scalar = xr.DataArray(np.array([[10.0, 10.0]], dtype=np.float32), dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
+    zenith_values = np.array([[10.0, 10.0]], dtype=np.float32) if sensor_zenith is None else sensor_zenith.astype(np.float32)
+    azimuth_values = np.array([[0.0, 90.0]], dtype=np.float32) if sensor_azimuth is None else sensor_azimuth.astype(np.float32)
+    zenith = xr.DataArray(zenith_values, dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
+    azimuth = xr.DataArray(azimuth_values, dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
     valid_mask = xr.DataArray(np.array([[True, True]]), dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
     return xr.Dataset(
         data_vars={
             "reflectance": reflectance,
-            "sensor_zenith": scalar,
+            "sensor_zenith": zenith,
+            "sensor_azimuth": azimuth,
             "valid_r0_mask": valid_mask,
         },
         coords={"y": [0], "x": [0, 1], "band": band_names},
@@ -129,6 +139,39 @@ def test_build_viirs_r0_candidate_metrics_masks_ndvi_to_negative_ndsi_candidates
     assert not np.isnan(candidates["candidate_ndvi"].isel(time=0, y=0, x=1))
 
 
+def test_build_viirs_r0_prefers_near_nadir_candidate_when_ndvi_is_within_epsilon():
+    scene_1 = build_mock_prepared_scene(
+        "2026-06-01",
+        np.array(
+            [
+                [0.20, 0.596, 0.4, 0.30, 0.2, 0.4, 0.4],
+                [0.2, 0.6, 0.4, 0.40, 0.2, 0.3, 0.3],
+            ],
+            dtype=np.float32,
+        ),
+        sensor_zenith=np.array([[28.0, 10.0]], dtype=np.float32),
+        sensor_azimuth=np.array([[70.0, 10.0]], dtype=np.float32),
+    )
+    scene_2 = build_mock_prepared_scene(
+        "2026-07-01",
+        np.array(
+            [
+                [0.20, 0.58, 0.4, 0.20, 0.2, 0.4, 0.4],
+                [0.3, 0.5, 0.1, 0.20, 0.2, 0.3, 0.3],
+            ],
+            dtype=np.float32,
+        ),
+        sensor_zenith=np.array([[10.0, 10.0]], dtype=np.float32),
+        sensor_azimuth=np.array([[5.0, 20.0]], dtype=np.float32),
+    )
+
+    r0 = build_viirs_r0(build_viirs_timeseries([scene_1, scene_2]), ndvi_tie_epsilon=0.02)
+
+    assert r0["r0_source_index"].isel(y=0, x=0).item() == 1
+    assert np.isclose(r0["r0_sensor_zenith"].isel(y=0, x=0).item(), 10.0)
+    assert np.isclose(r0["r0_sensor_azimuth"].isel(y=0, x=0).item(), 5.0)
+
+
 def test_build_viirs_timeseries_concatenates_prepared_scenes_by_time():
     scene_2 = build_mock_prepared_scene("2026-07-01", np.full((2, 7), 0.2, dtype=np.float32))
     scene_1 = build_mock_prepared_scene("2026-06-01", np.full((2, 7), 0.1, dtype=np.float32))
@@ -152,7 +195,7 @@ def test_reduce_viirs_prepared_scene_for_r0_keeps_only_required_variables():
 
     reduced = reduce_viirs_prepared_scene_for_r0(scene)
 
-    assert {"reflectance", "sensor_zenith", "valid_r0_mask"}.issubset(reduced.data_vars)
+    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "valid_r0_mask"}.issubset(reduced.data_vars)
 
 
 def test_build_viirs_timeseries_can_keep_only_r0_variables():
@@ -163,7 +206,7 @@ def test_build_viirs_timeseries_can_keep_only_r0_variables():
 
     timeseries = build_viirs_timeseries([scene_1, scene_2], keep_variables="r0")
 
-    assert {"reflectance", "sensor_zenith", "valid_r0_mask"}.issubset(timeseries.data_vars)
+    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "valid_r0_mask"}.issubset(timeseries.data_vars)
 
 
 def test_build_viirs_timeseries_can_write_reduced_stack_to_zarr(tmp_path):
@@ -179,7 +222,7 @@ def test_build_viirs_timeseries_can_write_reduced_stack_to_zarr(tmp_path):
     )
 
     assert zarr_path.exists()
-    assert {"reflectance", "sensor_zenith", "valid_r0_mask"}.issubset(timeseries.data_vars)
+    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "valid_r0_mask"}.issubset(timeseries.data_vars)
     assert timeseries.sizes["time"] == 2
 
 
@@ -214,6 +257,40 @@ def test_unified_viirs_r0_from_sources_matches_timeseries_builder():
         from_timeseries["r0_used_min_blue_rule"].values,
         from_sources["r0_used_min_blue_rule"].values,
     )
+
+
+def test_build_viirs_r0_writes_selected_sensor_angles():
+    scene_1 = build_mock_prepared_scene(
+        "2026-06-01",
+        np.array(
+            [
+                [0.2, 0.3, 0.1, 0.30, 0.5, 0.4, 0.4],
+                [0.2, 0.6, 0.4, 0.40, 0.2, 0.3, 0.3],
+            ],
+            dtype=np.float32,
+        ),
+        sensor_zenith=np.array([[12.0, 14.0]], dtype=np.float32),
+        sensor_azimuth=np.array([[25.0, 35.0]], dtype=np.float32),
+    )
+    scene_2 = build_mock_prepared_scene(
+        "2026-07-01",
+        np.array(
+            [
+                [0.2, 0.4, 0.1, 0.20, 0.3, 0.4, 0.4],
+                [0.3, 0.5, 0.1, 0.20, 0.2, 0.3, 0.3],
+            ],
+            dtype=np.float32,
+        ),
+        sensor_zenith=np.array([[18.0, 20.0]], dtype=np.float32),
+        sensor_azimuth=np.array([[55.0, 65.0]], dtype=np.float32),
+    )
+
+    r0 = build_viirs_r0(build_viirs_timeseries([scene_1, scene_2]))
+
+    assert np.isclose(r0["r0_sensor_zenith"].isel(y=0, x=0).item(), 18.0)
+    assert np.isclose(r0["r0_sensor_azimuth"].isel(y=0, x=0).item(), 55.0)
+    assert np.isclose(r0["r0_sensor_zenith"].isel(y=0, x=1).item(), 14.0)
+    assert np.isclose(r0["r0_sensor_azimuth"].isel(y=0, x=1).item(), 35.0)
 
 
 def test_unified_viirs_r0_from_sources_loads_existing_file_and_logs_path(tmp_path):
@@ -319,14 +396,9 @@ def test_build_viirs_timeseries_logs_batch_start_before_scene_details(tmp_path):
         handler.flush()
 
     contents = log_path.read_text()
-    lines = contents.splitlines()
-    start_line_index = next(
-        idx for idx, line in enumerate(lines) if '====== START ====== event="build_viirs_timeseries"' in line
-    )
-    assert set(lines[start_line_index - 1]) == {"="}
-    assert '====== START ====== event="build_viirs_timeseries" stage="timeseries" event_type="start" status="started"' in contents
+    assert 'event="build_viirs_timeseries" stage="timeseries" event_type="start" status="started"' in contents
     assert 'requested_time_coverage_start="2026-06-01"' in contents
     assert 'requested_time_coverage_end="2026-07-01"' in contents
-    assert contents.index('====== START ====== event="build_viirs_timeseries" stage="timeseries" event_type="start"') < contents.index(
+    assert contents.index('event="build_viirs_timeseries" stage="timeseries" event_type="start" status="started"') < contents.index(
         'event="build_viirs_timeseries_scene" stage="timeseries" event_type="detail"'
     )

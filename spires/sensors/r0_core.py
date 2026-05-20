@@ -327,8 +327,23 @@ def select_time_indices(metric: xr.DataArray, *, mode: str) -> tuple[xr.DataArra
     return index, invalid
 
 
-def gather_spectra_by_index(
-    reflectance: xr.DataArray,
+def build_view_geometry_tiebreak_metric(
+    sensor_zenith: xr.DataArray,
+    sensor_azimuth: xr.DataArray,
+) -> xr.DataArray:
+    """Build a stable near-nadir tie-break metric with directional components as secondary keys."""
+    azimuth_radians = np.deg2rad(sensor_azimuth)
+    view_x = np.sin(np.deg2rad(sensor_zenith)) * np.cos(azimuth_radians)
+    view_y = np.sin(np.deg2rad(sensor_zenith)) * np.sin(azimuth_radians)
+    return (
+        sensor_zenith.astype(np.float32)
+        + np.abs(view_x).astype(np.float32) * np.float32(1.0e-3)
+        + np.abs(view_y).astype(np.float32) * np.float32(1.0e-6)
+    ).rename("view_geometry_tiebreak_metric")
+
+
+def gather_values_by_index(
+    values: xr.DataArray,
     source_index: xr.DataArray,
     invalid_mask: xr.DataArray,
 ) -> xr.DataArray:
@@ -349,8 +364,7 @@ def gather_spectra_by_index(
         invalid_mask = invalid_mask.compute()
 
     safe_index = source_index.where(~invalid_mask, other=0)
-    gathered = reflectance.isel(time=safe_index)
-    return gathered.where(~invalid_mask).astype(np.float32)
+    return values.isel(time=safe_index).where(~invalid_mask)
 
 
 def build_r0(
@@ -359,6 +373,7 @@ def build_r0(
     logger: logging.Logger | None,
     event_name: str,
     max_sensor_zenith: float,
+    ndvi_tie_epsilon: float,
     ndvi_red_band: str,
     ndvi_nir_band: str,
     ndsi_visible_band: str,
@@ -386,13 +401,23 @@ def build_r0(
     candidate_ndvi = candidate_ds["candidate_ndvi"]
     candidate_blue_metric = candidate_ds["candidate_blue_metric"]
     has_negative_ndsi = candidate_ds["has_negative_ndsi"]
+    sensor_zenith = prepared_timeseries["sensor_zenith"]
+    sensor_azimuth = prepared_timeseries["sensor_azimuth"]
+    ndvi_near_max_threshold = candidate_ndvi.max(dim="time", skipna=True) - np.float32(ndvi_tie_epsilon)
+    near_max_ndvi_mask = candidate_ndvi >= ndvi_near_max_threshold
+    view_geometry_tiebreak_metric = build_view_geometry_tiebreak_metric(sensor_zenith, sensor_azimuth)
+    candidate_ndvi_tiebreak_metric = view_geometry_tiebreak_metric.where(near_max_ndvi_mask)
 
-    idx_max_ndvi, invalid_ndvi = select_time_indices(candidate_ndvi, mode="max")
+    idx_max_ndvi, invalid_ndvi = select_time_indices(candidate_ndvi_tiebreak_metric, mode="min")
     idx_min_blue, invalid_blue = select_time_indices(candidate_blue_metric, mode="min")
 
     reflectance = prepared_timeseries["reflectance"]
-    spectra_from_max_ndvi = gather_spectra_by_index(reflectance, idx_max_ndvi, invalid_ndvi)
-    spectra_from_min_blue = gather_spectra_by_index(reflectance, idx_min_blue, invalid_blue)
+    spectra_from_max_ndvi = gather_values_by_index(reflectance, idx_max_ndvi, invalid_ndvi).astype(np.float32)
+    spectra_from_min_blue = gather_values_by_index(reflectance, idx_min_blue, invalid_blue).astype(np.float32)
+    sensor_zenith_from_max_ndvi = gather_values_by_index(sensor_zenith, idx_max_ndvi, invalid_ndvi).astype(np.float32)
+    sensor_zenith_from_min_blue = gather_values_by_index(sensor_zenith, idx_min_blue, invalid_blue).astype(np.float32)
+    sensor_azimuth_from_max_ndvi = gather_values_by_index(sensor_azimuth, idx_max_ndvi, invalid_ndvi).astype(np.float32)
+    sensor_azimuth_from_min_blue = gather_values_by_index(sensor_azimuth, idx_min_blue, invalid_blue).astype(np.float32)
 
     min_ndsi = ndsi.min(dim="time", skipna=True)
     max_ndvi = candidate_ndvi.max(dim="time", skipna=True)
@@ -401,6 +426,8 @@ def build_r0(
     use_min_blue = (~has_negative_ndsi).fillna(False).astype(bool)
     invalid_final = xr.where(use_min_blue, invalid_blue, invalid_ndvi)
     r0_values = xr.where(use_min_blue, spectra_from_min_blue, spectra_from_max_ndvi).where(~invalid_final).astype(np.float32)
+    r0_sensor_zenith = xr.where(use_min_blue, sensor_zenith_from_min_blue, sensor_zenith_from_max_ndvi).where(~invalid_final).astype(np.float32)
+    r0_sensor_azimuth = xr.where(use_min_blue, sensor_azimuth_from_min_blue, sensor_azimuth_from_max_ndvi).where(~invalid_final).astype(np.float32)
 
     source_index = xr.where(use_min_blue, idx_min_blue, idx_max_ndvi).where(~invalid_final, other=-1).astype(np.int32)
     safe_source_index = xr.DataArray(
@@ -442,6 +469,8 @@ def build_r0(
                 coords={"y": prepared_timeseries["y"].values, "x": prepared_timeseries["x"].values},
             ),
             "r0_count": valid_count.astype(np.int32),
+            "r0_sensor_zenith": r0_sensor_zenith,
+            "r0_sensor_azimuth": r0_sensor_azimuth,
             "max_ndvi": max_ndvi,
             "min_ndsi": min_ndsi,
             "min_blue_metric": min_blue,
@@ -461,6 +490,7 @@ def build_r0(
         time_coverage_end=str(time_values.max())[:10],
         selected_bands=prepared_timeseries["band"].values.tolist(),
         output_shape=list(result["r0_reflectance"].shape),
+        ndvi_tie_epsilon=ndvi_tie_epsilon,
         used_min_blue_fraction=round(used_min_blue_fraction, 6),
         valid_source_fraction=round(valid_source_fraction, 6),
         mean_r0_count=round(scalar_dataarray_to_float(valid_count.mean()), 6),
@@ -645,6 +675,7 @@ def build_r0_from_sources(
     show_progress: bool,
     progress_desc: str,
     max_sensor_zenith: float,
+    ndvi_tie_epsilon: float,
     zarr_path: str | Path | None,
     zarr_mode: str,
     chunks: dict[str, int] | None,
@@ -735,6 +766,7 @@ def build_r0_from_sources(
         logger=logger,
         event_name=r0_build_event_name,
         max_sensor_zenith=max_sensor_zenith,
+        ndvi_tie_epsilon=ndvi_tie_epsilon,
         ndvi_red_band=ndvi_red_band,
         ndvi_nir_band=ndvi_nir_band,
         ndsi_visible_band=ndsi_visible_band,

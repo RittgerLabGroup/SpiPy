@@ -337,3 +337,43 @@ git push
 
 - rerun the notebook `build_r0` cell for a single tile using the new CURC `Zarr` path before broadening the tile set
 - if that succeeds cleanly on real `WY2024` data, revisit whether the notebook still needs a single-tile `R0_BUILD_TILE` guard or can be relaxed to a small tile subset
+
+## Session Update (2026-05-20, later)
+
+- the shared `R0` selector was revised to keep the existing negative-`NDSI` / max-`NDVI` / min-blue structure while adding a geometry-aware tie-break within the negative-`NDSI` branch:
+  - for each pixel, if any candidate dates satisfy `NDSI < 0`, the candidate pool is still defined by that rule
+  - `NDVI` remains the primary ranking metric
+  - candidates within `ndvi_tie_epsilon` of the per-pixel max `NDVI` are now treated as near-ties
+  - near-ties are broken by preferring more nadir-like viewing geometry, with `sensor_zenith` as the primary key and directional components derived from `sensor_zenith` / `sensor_azimuth` as secondary keys
+  - default `ndvi_tie_epsilon` is currently `0.02`
+- the `R0` outputs now retain the selected per-pixel sensor geometry needed for later inversion-side filtering or diagnostics:
+  - `r0_sensor_zenith`
+  - `r0_sensor_azimuth`
+  - no scalar `sensor_view_angle` layer is persisted
+- CURC top-level `build_r0` execution now exposes the tie-break control:
+  - `workflows/curc/execution.py` preview/execute helpers accept `ndvi_tie_epsilon`
+  - `workflows/curc/runner.py` exposes that same option through:
+    - `preview_viirs_snpp_step_execution(...)`
+    - `run_viirs_snpp_step(...)`
+  - `scripts/run_curc_workflow_step.py` now accepts:
+    - `--ndvi-tie-epsilon <float>`
+- the CURC notebook was updated to surface the new `R0` tie-break control and to relax the prior single-tile `build_r0` restriction:
+  - preview cell control:
+    - `R0_NDVI_TIE_EPSILON = 0.02`
+  - execution cell controls:
+    - `R0_NDVI_TIE_EPSILON = 0.02`
+    - `R0_BUILD_TILES = tuple(tiles)`
+  - `build_r0` execution is no longer hard-coded to a single `R0_BUILD_TILE`; it can now run for any configured subset of tiles
+- focused validation from this session:
+  - `module load miniforge && mamba run -n spipy14 python -m pytest -q tests/test_viirs_r0.py`
+    - result: `15 passed`
+  - `module load miniforge && mamba run -n spipy14 python -m pytest -q tests/test_curc_execution.py tests/test_viirs_r0.py`
+    - result: `22 passed`
+
+### Immediate Next Step
+
+- use the notebook `R0_BUILD_TILES` control to start with a small tile subset while keeping the new `R0_NDVI_TIE_EPSILON = 0.02` default
+- inspect the resulting `snpp_r0_<tile>_<year>.nc` files to confirm:
+  - `r0_sensor_zenith` and `r0_sensor_azimuth` are present
+  - candidate coverage and output quality remain acceptable under the new tie-break rule
+- if that looks stable, broaden `R0_BUILD_TILES` to the full notebook tile set for the next full water-year pass

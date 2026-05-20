@@ -31,7 +31,7 @@ def main(argv: list[str]) -> int:
         print(
             "usage: run_curc_workflow_step.py <config.py> <tile> <water_year> <step> "
             "[--date <YYYY-MM-DD> ...] [--r0-year <year>] [--execute] [--overwrite] "
-            "[--rsync-exec <path>] [--lut-file <path>] [--show-progress]",
+            "[--rsync-exec <path>] [--lut-file <path>] [--ndvi-tie-epsilon <float>] [--show-progress]",
             file=sys.stderr,
         )
         return 2
@@ -46,6 +46,7 @@ def main(argv: list[str]) -> int:
     overwrite = False
     rsync_executable = "rsync"
     lut_file = None
+    ndvi_tie_epsilon = 0.02
     show_progress = False
 
     i = 5
@@ -67,6 +68,9 @@ def main(argv: list[str]) -> int:
         elif token == "--lut-file":
             i += 1
             lut_file = argv[i]
+        elif token == "--ndvi-tie-epsilon":
+            i += 1
+            ndvi_tie_epsilon = float(argv[i])
         elif token == "--show-progress":
             show_progress = True
         else:
@@ -84,6 +88,7 @@ def main(argv: list[str]) -> int:
         execute=execute,
         rsync_executable=rsync_executable,
         lut_file=lut_file,
+        ndvi_tie_epsilon=ndvi_tie_epsilon,
         overwrite=overwrite,
         show_progress=show_progress,
     )
