@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -76,7 +77,8 @@ def main(argv: list[str]) -> int:
         grouping_method=grouping_method,
     )
     rendered = asdict(context) if is_dataclass(context) else context
-    print(json.dumps(rendered, indent=2))
+    if os.environ.get("SLURM_JOB_ID") is None:
+        print(json.dumps(rendered, indent=2))
     return 0
 
 

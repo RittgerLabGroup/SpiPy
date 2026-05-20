@@ -230,14 +230,7 @@ class _SPIRESPlainIndentedFormatter(_SPIRESLogFormatter):
     """Same contextual indentation behavior without visual separator lines."""
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted = super().format(record)
-        if "\n" not in formatted:
-            return formatted
-        # `_SPIRESLogFormatter` prepends a separator line only when callouts are present.
-        lines = formatted.splitlines()
-        if lines and set(lines[0]) == {"="}:
-            return "\n".join(lines[1:])
-        return formatted
+        return super().format(record)
 
 
 def configure_spires_file_logger(
@@ -325,3 +318,14 @@ def make_spires_log_path(
     log_dir = Path(log_dir).expanduser().resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / ("_".join(parts) + extension)
+
+
+def remove_empty_log_file(path: str | Path) -> bool:
+    """Delete `path` if it exists and has zero size."""
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.exists() or not resolved.is_file():
+        return False
+    if resolved.stat().st_size != 0:
+        return False
+    resolved.unlink()
+    return True

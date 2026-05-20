@@ -8,12 +8,12 @@ from pathlib import Path
 import traceback
 from typing import Any
 
-from spires.logging_utils import configure_spires_file_logger, log_event
+from spires.logging_utils import configure_spires_file_logger, log_event, remove_empty_log_file
 from spires.sensors.io import load_output_dataset_if_valid, write_output_dataset
 from spires.sensors.viirs.workflow import run_viirs_inversion
 import xarray as xr
 
-from workflows.curc.config import CurcWorkflowConfig
+from workflows.curc.config import CurcWorkflowConfig, SlurmProfile
 from workflows.curc.paths import r0_dataset_path
 from workflows.curc.steps import InversionTaskPlan
 from workflows.curc.task_manifest import load_inversion_array_manifest, resolve_inversion_task_from_manifest
@@ -110,6 +110,23 @@ def resolve_water_year_aggregate_log_path(task: InversionTaskPlan) -> Path:
     """Return near-real-time aggregate water-year runtime log path for one task."""
     base = Path(task.log_path).expanduser().resolve()
     return base.parent / f"run_inversion_wy{task.water_year}_aggregate.log"
+
+
+def resolve_slurm_stdout_path(
+    manifest_path: str | Path,
+    *,
+    slurm_job_name: str | None = None,
+    slurm_array_job_id: str | None = None,
+    slurm_array_task_id: str | None = None,
+) -> Path | None:
+    """Resolve the Slurm stdout path for the current array task when identifiable."""
+    if slurm_array_job_id is None or slurm_array_task_id is None:
+        return None
+    payload = load_inversion_array_manifest(manifest_path)
+    job_name = slurm_job_name if slurm_job_name is not None else str(payload["job_name"])
+    slurm_profile = SlurmProfile.from_payload(payload.get("slurm_profile"))
+    stdout_dir = Path(manifest_path).expanduser().resolve().parent if slurm_profile.output_dir is None else slurm_profile.output_dir
+    return stdout_dir.expanduser().resolve() / f"{job_name}_{slurm_array_job_id}_{slurm_array_task_id}.out"
 
 
 def _has_slurm_context(slurm_fields: dict[str, object]) -> bool:
@@ -282,6 +299,12 @@ def execute_viirs_snpp_inversion_task(
         lut_file=lut_file,
     )
     slurm_fields = slurm_metadata_from_env()
+    slurm_stdout_path = resolve_slurm_stdout_path(
+        context.manifest_path,
+        slurm_job_name=None if slurm_fields.get("slurm_job_name") is None else str(slurm_fields["slurm_job_name"]),
+        slurm_array_job_id=None if slurm_fields.get("slurm_array_job_id") is None else str(slurm_fields["slurm_array_job_id"]),
+        slurm_array_task_id=None if slurm_fields.get("slurm_array_task_id") is None else str(slurm_fields["slurm_array_task_id"]),
+    )
     runtime_log_path = resolve_runtime_task_log_path(
         context.task,
         slurm_job_id=None if slurm_fields.get("slurm_job_id") is None else str(slurm_fields["slurm_job_id"]),
@@ -354,6 +377,8 @@ def execute_viirs_snpp_inversion_task(
             **common_fields,
         )
         existing.close()
+        if slurm_stdout_path is not None:
+            remove_empty_log_file(slurm_stdout_path)
         return {
             "status": "loaded_existing",
             "context": asdict(context),
@@ -428,6 +453,8 @@ def execute_viirs_snpp_inversion_task(
             retry_count=context.task.retry_count,
             **common_fields,
         )
+        if slurm_stdout_path is not None:
+            remove_empty_log_file(slurm_stdout_path)
         return {
             "status": "completed",
             "context": asdict(context),
