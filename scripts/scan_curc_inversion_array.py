@@ -12,7 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from workflows.curc.status import scan_inversion_array_status, should_auto_retry, write_retry_manifest
+from workflows.curc.status import (
+    scan_inversion_array_status,
+    should_auto_retry,
+    write_retry_manifest,
+    write_status_summary_artifacts,
+)
 
 
 def main(argv: list[str]) -> int:
@@ -30,6 +35,9 @@ def main(argv: list[str]) -> int:
     report = scan_inversion_array_status(manifest_path)
     rendered = asdict(report) if is_dataclass(report) else report
     rendered["should_auto_retry"] = should_auto_retry(manifest_path)
+    task_attempts_csv_path, summary_txt_path = write_status_summary_artifacts(manifest_path, report=report)
+    rendered["task_attempts_csv_path"] = str(task_attempts_csv_path)
+    rendered["summary_txt_path"] = str(summary_txt_path)
     if write_retry:
         retry_manifest_path = write_retry_manifest(manifest_path, retry_only=retry_only)
         rendered["retry_manifest_path"] = str(retry_manifest_path)

@@ -428,6 +428,56 @@ def test_run_viirs_inversion_accepts_noaa21_lut_platform(monkeypatch, tmp_path):
     assert result.attrs["platform"] == "noaa21"
 
 
+def test_run_viirs_inversion_preserves_reflectance_in_output(monkeypatch, tmp_path):
+    scene = build_mock_prepared_scene()
+    r0 = build_mock_r0()
+
+    def fake_speedy_invert_dask(
+        *,
+        spectra_targets,
+        spectra_backgrounds,
+        obs_solar_angles,
+        interpolator,
+        max_eval,
+        x0,
+        algorithm,
+        client,
+        scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
+    ):
+        dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
+        coords = {dim: spectra_targets.coords[dim] for dim in dims}
+        fsca = xr.DataArray(np.full((2, 2), 0.75, dtype=np.float32), dims=dims, coords=coords)
+        return xr.Dataset(
+            data_vars={
+                "fsca": fsca,
+                "fshade": xr.ones_like(fsca) * 0.05,
+                "dust_concentration": xr.ones_like(fsca) * 10.0,
+                "grain_size": xr.ones_like(fsca) * 250.0,
+            }
+        )
+
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
+
+    result = run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local")
+
+    assert "reflectance" in result
+    assert result["reflectance"].dims == ("y", "x", "band")
+    np.testing.assert_allclose(result["reflectance"].values, scene["reflectance"].values)
+
+    output_path = tmp_path / "viirs_inversion_with_reflectance.nc"
+    result.to_netcdf(output_path)
+    with xr.open_dataset(output_path) as written:
+        np.testing.assert_allclose(written["reflectance"].values, scene["reflectance"].values)
+
+
 def test_default_viirs_canopy_lookup_is_platform_agnostic(monkeypatch, tmp_path):
     data_root = tmp_path / "data" / "viirs" / "ancillary" / "tiles" / "h08v05" / "static"
     data_root.mkdir(parents=True)

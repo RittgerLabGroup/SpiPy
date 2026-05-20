@@ -19,6 +19,7 @@ from workflows.curc.status import (
     InversionTaskStatus,
     scan_inversion_array_status,
     should_auto_retry,
+    write_status_summary_artifacts,
     write_retry_manifest,
 )
 from workflows.curc.slurm import (
@@ -57,5 +58,6 @@ __all__ = [
     "render_array_submission_payload_from_manifest",
     "render_sbatch_command_for_array_payload",
     "write_inversion_array_manifest",
+    "write_status_summary_artifacts",
     "write_retry_manifest",
 ]

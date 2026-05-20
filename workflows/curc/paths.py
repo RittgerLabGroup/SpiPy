@@ -49,3 +49,21 @@ def timestamped_log_dir(config: CurcWorkflowConfig, *, timestamp: str | None = N
     if timestamp is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return log_root(config) / timestamp
+
+
+def detailed_log_dir(path: str | Path) -> Path:
+    """Return the detailed log subdirectory for one timestamped CURC log directory."""
+    resolved = Path(path).expanduser().resolve()
+    if resolved.name == "detailed_logs":
+        return resolved
+    return resolved / "detailed_logs"
+
+
+def top_level_log_dir(path: str | Path) -> Path:
+    """Return the timestamped top-level log directory for a CURC log artifact path."""
+    resolved = Path(path).expanduser().resolve()
+    if resolved.name == "detailed_logs":
+        return resolved.parent
+    if resolved.parent.name == "detailed_logs":
+        return resolved.parent.parent
+    return resolved

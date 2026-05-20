@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from workflows.curc.paths import detailed_log_dir, top_level_log_dir
 from workflows.curc.runtime import resolve_runtime_task_log_path, resolve_water_year_aggregate_log_path
 from workflows.curc.status import _resolve_task_log_path
 from workflows.curc.steps import InversionTaskPlan
@@ -38,6 +39,15 @@ def test_water_year_aggregate_log_path(tmp_path: Path) -> None:
     resolved = resolve_water_year_aggregate_log_path(task)
     assert resolved.name == "run_inversion_wy2023_aggregate.log"
     assert resolved.parent == Path(task.log_path).parent
+
+
+def test_detailed_and_top_level_log_dir_helpers(tmp_path: Path) -> None:
+    top = tmp_path / "20260519_143044"
+    detailed = detailed_log_dir(top)
+
+    assert detailed == top / "detailed_logs"
+    assert top_level_log_dir(detailed) == top
+    assert top_level_log_dir(detailed / "run_inversion_2023-03-16.log") == top
 
 
 def test_status_prefers_newest_job_specific_log(tmp_path: Path) -> None:

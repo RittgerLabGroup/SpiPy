@@ -10,6 +10,7 @@ from workflows.curc.dates import default_r0_year_for_water_year, iter_dates, r0_
 from workflows.curc.discovery import discover_viirs_snpp_reflectance_files
 from workflows.curc.paths import (
     ancillary_dir,
+    detailed_log_dir,
     log_root,
     output_raw_water_year_root,
     r0_dir,
@@ -134,7 +135,7 @@ def plan_viirs_snpp_workflow_steps(
             destination_path=str(inversion_destination),
             notes=(
                 "Run inversion for the discovered scenes using the staged reflectance, ancillary inputs, and R0 product.",
-                f"Per-job logs should land under a timestamped subdirectory of {log_root(canonical)}.",
+                f"Per-job logs should land under detailed_logs/ inside a timestamped subdirectory of {log_root(canonical)}.",
             ),
             r0_year=resolved_r0_year,
         ),
@@ -166,7 +167,7 @@ def plan_viirs_snpp_inversion_array(
         grouped = {date: [] for date in target_dates}
 
     resolved_r0_year = default_r0_year_for_water_year(water_year) if r0_year is None else r0_year
-    log_dir = timestamped_log_dir(canonical, timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"))
+    log_dir = detailed_log_dir(timestamped_log_dir(canonical, timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")))
     tasks = []
     for task_index, (acquisition_date, paths) in enumerate(grouped.items()):
         tasks.append(

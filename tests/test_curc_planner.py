@@ -84,3 +84,4 @@ def test_water_year_workflow_and_array_plan_use_previous_summer_r0(tmp_path):
     assert array_plan.r0_year == 2022
     assert tuple(task.date for task in array_plan.tasks) == ("2022-10-01", "2023-03-16")
     assert all(task.r0_year == 2022 for task in array_plan.tasks)
+    assert all(Path(task.log_path).parent.name == "detailed_logs" for task in array_plan.tasks)

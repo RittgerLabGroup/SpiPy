@@ -262,10 +262,26 @@ git push
   - `curc_submit_inversion_array` now logs only the actual submission event
   - the runtime context is rendered as a dedicated `SUBMISSION PARAMETERS` block
   - scope separators now wrap runtime start/summary pairs and indentation depth is reduced by one level
+- full water year notebook execution for VIIRS SNPP tile `h08v05`, water year `2023`, was completed successfully:
+  - the latest full-run manifest under `/scratch/alpine/ropa5718/spipy/logs/20260519_143044/` carried `364` logical dates
+  - the output directory now contains `364` validated NetCDFs under `/scratch/alpine/ropa5718/spipy/output/viirs/snpp/h08v05/raw/wy2023/`
+  - no `auto_retry` submission artifacts or `retry_count > 0` runtime summaries were found for that full run
+  - five dates (`2023-03-16` through `2023-03-20`) were reported as `loaded_existing` because they had already been produced during the earlier targeted validation run
+- inversion outputs now persist the prepared reflectance cube alongside the science layers:
+  - final NetCDFs now include `reflectance(y, x, band)` in addition to the inversion products and `valid_inversion_mask`
+  - this was added in the shared sensor inversion path, so both VIIRS and MODIS outputs inherit it
+- aggregate reporting was redesigned away from the old human-readability-heavy aggregate log:
+  - scans now write `run_inversion_wy<year>_task_attempts.csv` with one row per attempt
+  - scans now write `run_inversion_wy<year>_summary.txt` with one row per scene date in water-year order
+  - the detailed CSV uses `last_attempt_for_date` to flag the winning/latest attempt for each date
+  - the human-readable summary includes the `TOTALS` block immediately after the manifest header and before the per-date table
+- timestamped log directory layout was revised again to separate machine summaries from detailed runtime artifacts:
+  - each timestamped run directory now keeps only the top-level summary artifacts (`task_attempts.csv` and `summary.txt`)
+  - manifests, per-task logs, submission logs, auto-retry logs, Slurm `.out` files, and the aggregate `.log` now live under a `detailed_logs/` subdirectory inside the timestamped run directory
 
 ### Next Step
 
-- run the full VIIRS SNPP water year `2023` example for tile `h08v05` from the notebook:
-  - stage the full water-year reflectance set to scratch
-  - submit the full inversion array without the previous `%1` concurrency limit
-  - inspect scheduler behavior, runtime stability, and aggregate log readability at water-year scale
+- re-run the notebook scan/reporting cells against the new summary-artifact layout:
+  - confirm `run_inversion_wy2023_task_attempts.csv` and `run_inversion_wy2023_summary.txt` are easy to use from the notebook
+  - verify the top-level timestamped directory stays uncluttered while `detailed_logs/` retains the full forensic trail
+  - decide whether the legacy aggregate `.log` should be retained, reduced further, or removed from the default workflow once the CSV/TXT summaries are proven sufficient

@@ -24,7 +24,12 @@ from workflows.curc.task_manifest import (
     resolve_inversion_task_from_manifest,
     write_inversion_array_manifest,
 )
-from workflows.curc.status import scan_inversion_array_status, should_auto_retry, write_retry_manifest
+from workflows.curc.status import (
+    scan_inversion_array_status,
+    should_auto_retry,
+    write_retry_manifest,
+    write_status_summary_artifacts,
+)
 
 
 def plan_submissions(config: CurcWorkflowConfig) -> list[dict[str, object]]:
@@ -199,7 +204,9 @@ def run_viirs_snpp_inversion_array_task(
 
 def scan_viirs_snpp_inversion_array(manifest_path: str):
     """Scan a manifest-backed inversion array for per-date outcomes."""
-    return scan_inversion_array_status(manifest_path)
+    report = scan_inversion_array_status(manifest_path)
+    write_status_summary_artifacts(manifest_path, report=report)
+    return report
 
 
 def write_viirs_snpp_retry_manifest(

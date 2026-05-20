@@ -532,6 +532,7 @@ def run_sensor_inversion(
     )
 
     results = results.assign_coords(scene_ds["reflectance"].coords)
+    results["reflectance"] = scene_reflectance.astype(np.float32)
     results["valid_inversion_mask"] = scene_valid_mask.astype(bool)
     results["valid_inversion_mask"].attrs = {
         "long_name": f"Valid {sensor_display_name} SPIReS inversion mask",
