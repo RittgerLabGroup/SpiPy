@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import asdict
 from pathlib import Path
 import shlex
@@ -10,7 +11,7 @@ import subprocess
 from spires.sensors.viirs.r0 import build_r0_from_sources
 
 from workflows.curc.config import CurcWorkflowConfig
-from workflows.curc.paths import job_log_dir, output_tile_root, r0_dataset_path, r0_dir
+from workflows.curc.paths import output_tile_root, r0_dataset_path, r0_dir
 from workflows.curc.runtime import default_viirs_lut_file
 from workflows.curc.steps import WorkflowStepPlan
 
@@ -59,7 +60,6 @@ def _ancillary_stage_directories(
     directories = [
         Path(step_plan.destination_path).expanduser().resolve(),
         r0_dir(canonical, step_plan.platform).expanduser().resolve() / step_plan.tile,
-        job_log_dir(canonical, step_plan.platform, step_plan.tile, step_plan.water_year).expanduser().resolve(),
         output_tile_root(canonical, step_plan.platform, step_plan.tile).expanduser().resolve(),
     ]
     if step_plan.r0_year is not None:
@@ -80,6 +80,24 @@ def _build_r0_output_dataset_path(config: CurcWorkflowConfig, step_plan: Workflo
     if step_plan.r0_year is None:
         raise ValueError("build_r0 step requires step_plan.r0_year")
     return r0_dataset_path(canonical, step_plan.platform, step_plan.tile, step_plan.r0_year).expanduser().resolve()
+
+
+def _build_r0_progress_desc(step_plan: WorkflowStepPlan) -> str:
+    product_name = f"{step_plan.sensor.upper()} {step_plan.platform.upper()}"
+    if step_plan.source_paths:
+        first_name = Path(step_plan.source_paths[0]).name
+        product_token = first_name.split(".", 1)[0]
+        if product_token:
+            product_name = product_token
+
+    if step_plan.dates:
+        start_date = step_plan.dates[0]
+        end_date = step_plan.dates[-1]
+    else:
+        start_date = "unknown"
+        end_date = "unknown"
+
+    return f"Building {product_name} R0: {step_plan.tile} {start_date} - {end_date}"
 
 
 def preview_viirs_snpp_workflow_step_execution(
@@ -140,6 +158,7 @@ def preview_viirs_snpp_workflow_step_execution(
         result["ndvi_tie_epsilon"] = float(ndvi_tie_epsilon)
         result["zarr_path"] = None if resolved_zarr_path is None else str(resolved_zarr_path)
         result["chunks"] = None if chunks is None else dict(chunks)
+        result["progress_desc"] = _build_r0_progress_desc(step_plan)
         result["show_progress"] = show_progress
         return result
 
@@ -220,11 +239,14 @@ def execute_viirs_snpp_workflow_step(
             zarr_path=zarr_path,
             chunks=chunks,
             show_progress=show_progress,
+            progress_desc=_build_r0_progress_desc(step_plan),
         )
         preview["executed"] = True
         preview["output_dataset_path"] = str(output_dataset_path)
         preview["dataset_attrs"] = dataset.attrs.copy()
         preview["dataset_sizes"] = dict(dataset.sizes)
+        del dataset
+        gc.collect()
         return preview
 
     if step_plan.step == "run_inversion":

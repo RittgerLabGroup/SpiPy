@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from workflows.curc.config import CurcWorkflowConfig
@@ -10,12 +9,12 @@ from workflows.curc.dates import default_r0_year_for_water_year, iter_dates, r0_
 from workflows.curc.discovery import discover_viirs_snpp_reflectance_files
 from workflows.curc.paths import (
     ancillary_dir,
-    detailed_log_dir,
+    build_run_group_id,
     log_root,
     output_raw_water_year_root,
     r0_dir,
     reflectance_dir,
-    timestamped_log_dir,
+    tile_detailed_log_dir,
 )
 from workflows.curc.steps import InversionTaskPlan, SlurmArrayPlan, WorkflowStepPlan
 from spires.sensors.viirs.hdf import parse_viirs_surface_reflectance_filename
@@ -150,6 +149,7 @@ def plan_viirs_snpp_inversion_array(
     target_dates: tuple[str, ...] | list[str] = (),
     r0_year: int | None = None,
     max_concurrent_tasks: int | None = None,
+    run_group_id: str | None = None,
 ) -> SlurmArrayPlan:
     """Plan a Slurm array for VIIRS SNPP inversion with one logical task per date."""
     canonical = config.canonicalized()
@@ -167,7 +167,17 @@ def plan_viirs_snpp_inversion_array(
         grouped = {date: [] for date in target_dates}
 
     resolved_r0_year = default_r0_year_for_water_year(water_year) if r0_year is None else r0_year
-    log_dir = detailed_log_dir(timestamped_log_dir(canonical, timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")))
+    resolved_run_group_id = (
+        build_run_group_id(
+            sensor=canonical.sensor,
+            platform="snpp",
+            water_year=water_year,
+            target_dates=tuple(target_dates),
+        )
+        if run_group_id is None
+        else run_group_id
+    )
+    log_dir = tile_detailed_log_dir(canonical, run_group_id=resolved_run_group_id, tile=tile)
     tasks = []
     for task_index, (acquisition_date, paths) in enumerate(grouped.items()):
         tasks.append(

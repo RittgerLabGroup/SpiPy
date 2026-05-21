@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 from pathlib import Path
@@ -642,6 +643,10 @@ def build_timeseries(
         timeseries = xr.open_zarr(resolved_zarr_path)
     else:
         timeseries = xr.concat(prepared_scenes, dim="time")
+        # The concatenated stack owns the data needed from the per-scene list.
+        # Drop the individual scene references before downstream metric building.
+        prepared_scenes.clear()
+        gc.collect()
 
     if "time" in timeseries.coords:
         timeseries = timeseries.sortby("time")
@@ -778,6 +783,10 @@ def build_r0_from_sources(
     result.attrs["time_coverage_start"] = str(timeseries["time"].min().values)[:10]
     result.attrs["time_coverage_end"] = str(timeseries["time"].max().values)[:10]
     result.attrs["build_status"] = "complete"
+    # The output product no longer depends on the full source stack after the
+    # summary attrs are copied, so drop it before final serialization.
+    del timeseries
+    gc.collect()
     result = sanitize_r0_dataset_attrs(result)
 
     if resolved_r0_path is not None:

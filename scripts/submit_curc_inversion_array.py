@@ -19,7 +19,7 @@ from workflows.curc.slurm import (
     render_array_submission_payload_from_manifest,
     render_sbatch_command_for_array_payload,
 )
-from workflows.curc.status import scan_inversion_array_status
+from workflows.curc.status import scan_inversion_array_status, write_terminal_summary_artifacts
 from workflows.curc.task_manifest import load_inversion_array_manifest
 
 
@@ -57,17 +57,16 @@ def main(argv: list[str]) -> int:
         i += 1
 
     manifest_payload = load_inversion_array_manifest(manifest_path)
-    aggregate_log_path = manifest_path.parent / f"run_inversion_wy{manifest_payload['water_year']}_aggregate.log"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     submission_log_path = manifest_path.parent / (manifest_path.stem + f"_initial_submission_{timestamp}.log")
     logger = configure_spires_file_logger(
         submission_log_path,
         logger_name=f"spires.curc.initial_submission.{manifest_path.stem}",
         mode="a",
-        aggregate_log_path=aggregate_log_path,
     )
 
     report = scan_inversion_array_status(manifest_path)
+    summary_paths = write_terminal_summary_artifacts(manifest_path)
     rendered_report = asdict(report) if is_dataclass(report) else report
     payload = render_array_submission_payload_from_manifest(manifest_path)
     sbatch_command = render_sbatch_command_for_array_payload(
@@ -91,6 +90,7 @@ def main(argv: list[str]) -> int:
     result: dict[str, object] = {
         "manifest_path": str(manifest_path),
         "report": rendered_report,
+        **summary_paths,
         "payload": payload,
         "sbatch_command": sbatch_command,
         "submitted": False,

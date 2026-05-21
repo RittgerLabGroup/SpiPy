@@ -70,6 +70,7 @@ class InversionArrayStatusReport:
 class InversionTaskAttempt:
     """Observed status for one attempt of one logical inversion date."""
 
+    run_group_id: str
     water_year: int
     scene_date: str
     task_index: int
@@ -278,6 +279,22 @@ def _event_elapsed_seconds(start_event: dict[str, Any] | None, summary_event: di
     return round((end_ts - start_ts).total_seconds(), 3)
 
 
+def _parse_event_timestamp_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.removesuffix("Z"))
+    except ValueError:
+        return None
+
+
+def _format_elapsed_seconds(value: float | int) -> str:
+    total_seconds = int(round(float(value)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def _attempt_message(status: str, failure_code: str) -> str:
     if status == "loaded_existing":
         return "reused prior successful output"
@@ -290,10 +307,32 @@ def _attempt_message(status: str, failure_code: str) -> str:
     return status
 
 
+def _manifest_run_group_dir(payload: dict[str, object], manifest_path: str | Path) -> Path:
+    raw = payload.get("run_group_dir")
+    if raw is not None:
+        return Path(str(raw)).expanduser().resolve()
+    return top_level_log_dir(manifest_path)
+
+
+def _manifest_tile_run_dir(payload: dict[str, object], manifest_path: str | Path) -> Path:
+    raw = payload.get("tile_run_dir")
+    if raw is not None:
+        return Path(str(raw)).expanduser().resolve()
+    return _manifest_run_group_dir(payload, manifest_path) / str(payload["tile"])
+
+
+def _manifest_tile_detailed_log_dir(payload: dict[str, object], manifest_path: str | Path) -> Path:
+    raw = payload.get("tile_detailed_log_dir")
+    if raw is not None:
+        return Path(str(raw)).expanduser().resolve()
+    return _manifest_tile_run_dir(payload, manifest_path) / "detailed_logs"
+
+
 def _collect_task_attempts(manifest_path: str | Path) -> tuple[InversionTaskAttempt, ...]:
     attempts_by_date: dict[str, list[InversionTaskAttempt]] = {}
     for family_index, path in enumerate(_related_manifest_paths(manifest_path)):
         payload = load_inversion_array_manifest(path)
+        run_group_id = str(payload.get("run_group_id", _manifest_run_group_dir(payload, path).name))
         max_auto_retry_count = int(payload.get("max_auto_retry_count", 3))
         for raw_task in payload["tasks"]:
             task = InversionTaskPlan(
@@ -327,6 +366,7 @@ def _collect_task_attempts(manifest_path: str | Path) -> tuple[InversionTaskAtte
                 retry_recommended = True
 
             attempt = InversionTaskAttempt(
+                run_group_id=run_group_id,
                 water_year=task.water_year,
                 scene_date=task.date,
                 task_index=task.task_index,
@@ -380,94 +420,148 @@ def _collect_task_attempts(manifest_path: str | Path) -> tuple[InversionTaskAtte
     return tuple(all_attempts)
 
 
-def _task_attempts_csv_path(manifest_path: str | Path, *, water_year: int) -> Path:
-    resolved = top_level_log_dir(manifest_path)
-    return resolved / f"run_inversion_wy{water_year}_task_attempts.csv"
+CSV_FIELDS = [
+    "run_group_id",
+    "water_year",
+    "scene_date",
+    "task_index",
+    "attempt_ordinal",
+    "submission_kind",
+    "retry_count",
+    "last_attempt_for_date",
+    "status",
+    "failure_code",
+    "retry_recommended",
+    "loaded_existing",
+    "submitted",
+    "started",
+    "completed",
+    "output_valid",
+    "output_path",
+    "log_path",
+    "manifest_path",
+    "log_dir",
+    "sensor",
+    "platform",
+    "tile",
+    "slurm_array_job_id",
+    "slurm_array_task_id",
+    "slurm_job_id",
+    "slurm_job_name",
+    "slurm_cluster_name",
+    "start_time_utc",
+    "end_time_utc",
+    "elapsed_seconds",
+    "message",
+]
 
 
-def _summary_txt_path(manifest_path: str | Path, *, water_year: int) -> Path:
-    resolved = top_level_log_dir(manifest_path)
-    return resolved / f"run_inversion_wy{water_year}_summary.txt"
-
-
-def write_status_summary_artifacts(
-    manifest_path: str | Path,
-    *,
-    report: InversionArrayStatusReport | None = None,
-) -> tuple[Path, Path]:
-    """Write task-attempt CSV and per-date text summary for one manifest family."""
-    resolved_manifest_path = Path(manifest_path).expanduser().resolve()
-    manifest_payload = load_inversion_array_manifest(resolved_manifest_path)
-    attempts = _collect_task_attempts(resolved_manifest_path)
-    csv_path = _task_attempts_csv_path(resolved_manifest_path, water_year=int(manifest_payload["water_year"]))
-    txt_path = _summary_txt_path(resolved_manifest_path, water_year=int(manifest_payload["water_year"]))
-
-    csv_fields = [
-        "water_year",
-        "scene_date",
-        "task_index",
-        "attempt_ordinal",
-        "submission_kind",
-        "retry_count",
-        "last_attempt_for_date",
-        "status",
-        "failure_code",
-        "retry_recommended",
-        "loaded_existing",
-        "submitted",
-        "started",
-        "completed",
-        "output_valid",
-        "output_path",
-        "log_path",
-        "manifest_path",
-        "log_dir",
-        "sensor",
-        "platform",
-        "tile",
-        "slurm_array_job_id",
-        "slurm_array_task_id",
-        "slurm_job_id",
-        "slurm_job_name",
-        "slurm_cluster_name",
-        "start_time_utc",
-        "end_time_utc",
-        "elapsed_seconds",
-        "message",
+def _attempts_wall_time(attempts: tuple[InversionTaskAttempt, ...]) -> tuple[datetime | None, datetime | None, float | None]:
+    start_times = [
+        parsed
+        for parsed in (_parse_event_timestamp_iso(attempt.start_time_utc) for attempt in attempts)
+        if parsed is not None
     ]
+    end_times = [
+        parsed
+        for parsed in (_parse_event_timestamp_iso(attempt.end_time_utc) for attempt in attempts)
+        if parsed is not None
+    ]
+    wall_time_start = min(start_times) if start_times else None
+    wall_time_end = max(end_times) if end_times else None
+    wall_time_seconds = None
+    if wall_time_start is not None and wall_time_end is not None:
+        wall_time_seconds = round((wall_time_end - wall_time_start).total_seconds(), 3)
+    return wall_time_start, wall_time_end, wall_time_seconds
+
+
+def _final_attempts(attempts: tuple[InversionTaskAttempt, ...]) -> list[InversionTaskAttempt]:
+    return sorted((attempt for attempt in attempts if attempt.last_attempt_for_date), key=lambda attempt: (attempt.tile, attempt.scene_date))
+
+
+def _attempts_per_date(attempts: tuple[InversionTaskAttempt, ...]) -> dict[tuple[str, str], int]:
+    counts: dict[tuple[str, str], int] = {}
+    for attempt in attempts:
+        key = (attempt.tile, attempt.scene_date)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _totals_from_final_attempts(final_attempts: list[InversionTaskAttempt]) -> dict[str, int]:
+    return {
+        "dates": len(final_attempts),
+        "completed": sum(1 for attempt in final_attempts if attempt.status == "completed"),
+        "loaded_existing": sum(1 for attempt in final_attempts if attempt.status == "loaded_existing"),
+        "failed": sum(1 for attempt in final_attempts if attempt.status not in {"completed", "loaded_existing"}),
+        "missing_output": sum(1 for attempt in final_attempts if not attempt.output_valid),
+        "auto_retried_dates": sum(1 for attempt in final_attempts if attempt.retry_count > 0),
+    }
+
+
+def _write_attempt_csv(csv_path: Path, attempts: tuple[InversionTaskAttempt, ...]) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=csv_fields)
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
         writer.writeheader()
         for attempt in attempts:
-            writer.writerow({field: getattr(attempt, field) for field in csv_fields})
+            writer.writerow({field: getattr(attempt, field) for field in CSV_FIELDS})
 
-    final_attempts = [attempt for attempt in attempts if attempt.last_attempt_for_date]
-    final_attempts.sort(key=lambda attempt: attempt.scene_date)
-    completed_count = sum(1 for attempt in final_attempts if attempt.status == "completed")
-    loaded_existing_count = sum(1 for attempt in final_attempts if attempt.status == "loaded_existing")
-    failed_count = sum(1 for attempt in final_attempts if attempt.status not in {"completed", "loaded_existing"})
-    missing_output_count = sum(1 for attempt in final_attempts if not attempt.output_valid)
-    auto_retried_dates = sum(1 for attempt in final_attempts if attempt.retry_count > 0)
 
-    attempts_per_date: dict[str, int] = {}
-    for attempt in attempts:
-        attempts_per_date[attempt.scene_date] = attempts_per_date.get(attempt.scene_date, 0) + 1
+def _tile_summary_csv_path(manifest_payload: dict[str, object], manifest_path: str | Path) -> Path:
+    tile_dir = _manifest_tile_run_dir(manifest_payload, manifest_path)
+    return tile_dir / f"run_inversion_{manifest_payload['tile']}_wy{manifest_payload['water_year']}_summary.csv"
+
+
+def _tile_summary_txt_path(manifest_payload: dict[str, object], manifest_path: str | Path) -> Path:
+    tile_dir = _manifest_tile_run_dir(manifest_payload, manifest_path)
+    return tile_dir / f"run_inversion_{manifest_payload['tile']}_wy{manifest_payload['water_year']}_summary.txt"
+
+
+def _group_summary_csv_path(manifest_payload: dict[str, object], manifest_path: str | Path) -> Path:
+    run_group_dir = _manifest_run_group_dir(manifest_payload, manifest_path)
+    return run_group_dir / f"run_inversion_wy{manifest_payload['water_year']}_summary.csv"
+
+
+def _group_summary_txt_path(manifest_payload: dict[str, object], manifest_path: str | Path) -> Path:
+    run_group_dir = _manifest_run_group_dir(manifest_payload, manifest_path)
+    return run_group_dir / f"run_inversion_wy{manifest_payload['water_year']}_summary.txt"
+
+
+def _render_tile_summary_lines(
+    manifest_payload: dict[str, object],
+    manifest_path: Path,
+    attempts: tuple[InversionTaskAttempt, ...],
+) -> list[str]:
+    final_attempts = _final_attempts(attempts)
+    totals = _totals_from_final_attempts(final_attempts)
+    attempts_per_date = _attempts_per_date(attempts)
+    wall_time_start, wall_time_end, wall_time_seconds = _attempts_wall_time(attempts)
+    tile_dir = _manifest_tile_run_dir(manifest_payload, manifest_path)
 
     lines = [
-        f"WATER YEAR {manifest_payload['water_year']}",
+        f"TILE {manifest_payload['tile']} WATER YEAR {manifest_payload['water_year']}",
+        f"run_group_id={manifest_payload.get('run_group_id', _manifest_run_group_dir(manifest_payload, manifest_path).name)}",
         f"sensor={manifest_payload['sensor']} platform={manifest_payload['platform']} tile={manifest_payload['tile']}",
-        f"log_dir={top_level_log_dir(resolved_manifest_path)}",
-        f"manifest={resolved_manifest_path}",
+        f"tile_dir={tile_dir}",
+        f"manifest={manifest_path}",
+        f"wall_time_start_utc={wall_time_start.isoformat(timespec='seconds') + 'Z' if wall_time_start is not None else 'unknown'}",
+        f"wall_time_end_utc={wall_time_end.isoformat(timespec='seconds') + 'Z' if wall_time_end is not None else 'unknown'}",
+        (
+            f"total_wall_time_seconds={wall_time_seconds:.3f} ({_format_elapsed_seconds(wall_time_seconds)})"
+            if wall_time_seconds is not None
+            else "total_wall_time_seconds=unknown"
+        ),
         "",
         "TOTALS",
-        f"dates={len(final_attempts)}",
-        f"completed={completed_count}",
-        f"loaded_existing={loaded_existing_count}",
-        f"failed={failed_count}",
-        f"missing_output={missing_output_count}",
-        f"auto_retried_dates={auto_retried_dates}",
+        f"dates={totals['dates']}",
+        f"completed={totals['completed']}",
+        f"loaded_existing={totals['loaded_existing']}",
+        f"failed={totals['failed']}",
+        f"missing_output={totals['missing_output']}",
+        f"auto_retried_dates={totals['auto_retried_dates']}",
         f"total_attempt_rows={len(attempts)}",
         "",
+        "FINAL STATUS BY DATE",
         "scene_date   final_status     attempts  retry_count  failure_code  output  slurm_job  note",
     ]
     for attempt in final_attempts:
@@ -476,15 +570,39 @@ def write_status_summary_artifacts(
         lines.append(
             f"{attempt.scene_date:<12} "
             f"{attempt.status:<16} "
-            f"{attempts_per_date.get(attempt.scene_date, 0):<9} "
+            f"{attempts_per_date.get((attempt.tile, attempt.scene_date), 0):<9} "
             f"{attempt.retry_count:<12} "
             f"{attempt.failure_code:<13} "
             f"{output_flag:<7} "
             f"{slurm_job:<10} "
             f"{attempt.message}"
         )
-    txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines
+
+
+def write_tile_summary_artifacts(
+    manifest_path: str | Path,
+    *,
+    report: InversionArrayStatusReport | None = None,
+) -> tuple[Path, Path]:
+    """Write tile-local CSV/TXT summaries for one manifest family."""
+    resolved_manifest_path = Path(manifest_path).expanduser().resolve()
+    manifest_payload = load_inversion_array_manifest(resolved_manifest_path)
+    attempts = _collect_task_attempts(resolved_manifest_path)
+    csv_path = _tile_summary_csv_path(manifest_payload, resolved_manifest_path)
+    txt_path = _tile_summary_txt_path(manifest_payload, resolved_manifest_path)
+    _write_attempt_csv(csv_path, attempts)
+    txt_path.write_text("\n".join(_render_tile_summary_lines(manifest_payload, resolved_manifest_path, attempts)) + "\n", encoding="utf-8")
     return csv_path, txt_path
+
+
+def write_status_summary_artifacts(
+    manifest_path: str | Path,
+    *,
+    report: InversionArrayStatusReport | None = None,
+) -> tuple[Path, Path]:
+    """Backward-compatible wrapper for tile-local summary writing."""
+    return write_tile_summary_artifacts(manifest_path, report=report)
 
 
 def scan_inversion_array_status(manifest_path: str | Path) -> InversionArrayStatusReport:
@@ -529,6 +647,143 @@ def scan_inversion_array_status(manifest_path: str | Path) -> InversionArrayStat
         tasks=statuses,
         auto_retry_complete=auto_retry_eligible_count == 0,
     )
+
+
+def tile_run_complete(manifest_path: str | Path) -> bool:
+    """Return True when one tile manifest family is terminal."""
+    return scan_inversion_array_status(manifest_path).auto_retry_complete
+
+
+def list_run_group_tile_manifests(run_group_dir: str | Path) -> list[Path]:
+    """Return one primary array manifest per tile inside a run group."""
+    resolved = Path(run_group_dir).expanduser().resolve()
+    return sorted(
+        path
+        for path in resolved.glob("*/detailed_logs/*_array_manifest.json")
+        if not path.stem.endswith("_retry")
+    )
+
+
+def run_group_complete(run_group_dir: str | Path) -> bool:
+    """Return True when all tile runs in the group are terminal."""
+    manifests = list_run_group_tile_manifests(run_group_dir)
+    return bool(manifests) and all(tile_run_complete(path) for path in manifests)
+
+
+def _render_group_summary_lines(
+    run_group_dir: Path,
+    manifest_payload: dict[str, object],
+    attempts: tuple[InversionTaskAttempt, ...],
+) -> list[str]:
+    final_attempts = _final_attempts(attempts)
+    totals = _totals_from_final_attempts(final_attempts)
+    attempts_per_date = _attempts_per_date(attempts)
+    wall_time_start, wall_time_end, wall_time_seconds = _attempts_wall_time(attempts)
+    tiles = sorted({attempt.tile for attempt in attempts})
+
+    per_tile_totals: list[tuple[str, dict[str, int]]] = []
+    for tile in tiles:
+        tile_final_attempts = [attempt for attempt in final_attempts if attempt.tile == tile]
+        per_tile_totals.append((tile, _totals_from_final_attempts(tile_final_attempts)))
+
+    lines = [
+        f"RUN GROUP {manifest_payload.get('run_group_id', run_group_dir.name)}",
+        f"sensor={manifest_payload['sensor']} platform={manifest_payload['platform']} water_year={manifest_payload['water_year']}",
+        f"scope={manifest_payload.get('scope_kind', 'unknown')}",
+        f"run_group_dir={run_group_dir}",
+        f"tiles={','.join(tiles)}",
+        f"wall_time_start_utc={wall_time_start.isoformat(timespec='seconds') + 'Z' if wall_time_start is not None else 'unknown'}",
+        f"wall_time_end_utc={wall_time_end.isoformat(timespec='seconds') + 'Z' if wall_time_end is not None else 'unknown'}",
+        (
+            f"total_wall_time_seconds={wall_time_seconds:.3f} ({_format_elapsed_seconds(wall_time_seconds)})"
+            if wall_time_seconds is not None
+            else "total_wall_time_seconds=unknown"
+        ),
+        "",
+        "TOTALS",
+        f"tiles={len(tiles)}",
+        f"dates={totals['dates']}",
+        f"completed={totals['completed']}",
+        f"loaded_existing={totals['loaded_existing']}",
+        f"failed={totals['failed']}",
+        f"missing_output={totals['missing_output']}",
+        f"auto_retried_dates={totals['auto_retried_dates']}",
+        f"total_attempt_rows={len(attempts)}",
+        "",
+        "PER-TILE TOTALS",
+        "tile     dates  completed  loaded_existing  failed  missing_output  auto_retried_dates",
+    ]
+    for tile, tile_totals in per_tile_totals:
+        lines.append(
+            f"{tile:<8} {tile_totals['dates']:<6} {tile_totals['completed']:<10} "
+            f"{tile_totals['loaded_existing']:<16} {tile_totals['failed']:<7} "
+            f"{tile_totals['missing_output']:<14} {tile_totals['auto_retried_dates']}"
+        )
+
+    lines.extend(
+        [
+            "",
+            "FINAL STATUS BY DATE",
+            "tile     scene_date   final_status     attempts  retry_count  failure_code  output  slurm_job  note",
+        ]
+    )
+    for attempt in final_attempts:
+        output_flag = "yes" if attempt.output_valid else "no"
+        slurm_job = attempt.slurm_job_id or "-"
+        lines.append(
+            f"{attempt.tile:<8} "
+            f"{attempt.scene_date:<12} "
+            f"{attempt.status:<16} "
+            f"{attempts_per_date.get((attempt.tile, attempt.scene_date), 0):<9} "
+            f"{attempt.retry_count:<12} "
+            f"{attempt.failure_code:<13} "
+            f"{output_flag:<7} "
+            f"{slurm_job:<10} "
+            f"{attempt.message}"
+        )
+    return lines
+
+
+def write_run_group_summary_artifacts(run_group_dir: str | Path) -> tuple[Path, Path]:
+    """Write run-group-level merged CSV/TXT summaries across all tiles."""
+    resolved_run_group_dir = Path(run_group_dir).expanduser().resolve()
+    manifest_paths = list_run_group_tile_manifests(resolved_run_group_dir)
+    if not manifest_paths:
+        raise ValueError(f"No tile manifests found under run group: {resolved_run_group_dir}")
+
+    attempts = tuple(
+        sorted(
+            (
+                attempt
+                for manifest_path in manifest_paths
+                for attempt in _collect_task_attempts(manifest_path)
+            ),
+            key=lambda attempt: (attempt.tile, attempt.scene_date, attempt.retry_count, attempt.attempt_ordinal, attempt.task_index),
+        )
+    )
+    manifest_payload = load_inversion_array_manifest(manifest_paths[0])
+    csv_path = _group_summary_csv_path(manifest_payload, manifest_paths[0])
+    txt_path = _group_summary_txt_path(manifest_payload, manifest_paths[0])
+    _write_attempt_csv(csv_path, attempts)
+    txt_path.write_text("\n".join(_render_group_summary_lines(resolved_run_group_dir, manifest_payload, attempts)) + "\n", encoding="utf-8")
+    return csv_path, txt_path
+
+
+def write_terminal_summary_artifacts(manifest_path: str | Path) -> dict[str, str]:
+    """Write tile and, when eligible, run-group summaries for a manifest family."""
+    resolved_manifest_path = Path(manifest_path).expanduser().resolve()
+    manifest_payload = load_inversion_array_manifest(resolved_manifest_path)
+    paths: dict[str, str] = {}
+    if tile_run_complete(resolved_manifest_path):
+        tile_csv_path, tile_txt_path = write_tile_summary_artifacts(resolved_manifest_path)
+        paths["tile_summary_csv_path"] = str(tile_csv_path)
+        paths["tile_summary_txt_path"] = str(tile_txt_path)
+        run_group_dir = _manifest_run_group_dir(manifest_payload, resolved_manifest_path)
+        if run_group_complete(run_group_dir):
+            group_csv_path, group_txt_path = write_run_group_summary_artifacts(run_group_dir)
+            paths["run_group_summary_csv_path"] = str(group_csv_path)
+            paths["run_group_summary_txt_path"] = str(group_txt_path)
+    return paths
 
 
 def write_retry_manifest(

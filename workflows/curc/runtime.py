@@ -106,12 +106,6 @@ def resolve_runtime_task_log_path(task: InversionTaskPlan, *, slurm_job_id: str 
     return base.with_name(f"{base.stem}_job{slurm_job_id}{base.suffix}")
 
 
-def resolve_water_year_aggregate_log_path(task: InversionTaskPlan) -> Path:
-    """Return near-real-time aggregate water-year runtime log path for one task."""
-    base = Path(task.log_path).expanduser().resolve()
-    return base.parent / f"run_inversion_wy{task.water_year}_aggregate.log"
-
-
 def resolve_slurm_stdout_path(
     manifest_path: str | Path,
     *,
@@ -309,19 +303,15 @@ def execute_viirs_snpp_inversion_task(
         context.task,
         slurm_job_id=None if slurm_fields.get("slurm_job_id") is None else str(slurm_fields["slurm_job_id"]),
     )
-    aggregate_log_path = resolve_water_year_aggregate_log_path(context.task)
     logger = configure_spires_file_logger(
         runtime_log_path,
         logger_name=_task_logger_name(context),
         mode="a",
-        aggregate_log_path=aggregate_log_path,
         log_to_stdout=False,
-        aggregate_show_separators=True,
     )
     preamble_fields = {
         "platform": context.task.platform,
         "tile": context.task.tile,
-        "aggregate_log_path": str(aggregate_log_path),
         "date": context.task.date,
         "log_path": str(runtime_log_path),
         "manifest_path": context.manifest_path,

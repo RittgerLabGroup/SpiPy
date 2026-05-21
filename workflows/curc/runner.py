@@ -27,8 +27,9 @@ from workflows.curc.task_manifest import (
 from workflows.curc.status import (
     scan_inversion_array_status,
     should_auto_retry,
+    write_run_group_summary_artifacts,
     write_retry_manifest,
-    write_status_summary_artifacts,
+    write_terminal_summary_artifacts,
 )
 
 
@@ -64,6 +65,7 @@ def plan_viirs_snpp_inversion_array_submission(
     r0_year: int | None = None,
     max_concurrent_tasks: int | None = None,
     manifest_path: str | None = None,
+    run_group_id: str | None = None,
 ) -> dict[str, object]:
     """Return a rendered Slurm-array submission payload for VIIRS SNPP inversion dates."""
     plan = plan_viirs_snpp_inversion_array(
@@ -73,8 +75,9 @@ def plan_viirs_snpp_inversion_array_submission(
         target_dates=target_dates,
         r0_year=r0_year,
         max_concurrent_tasks=max_concurrent_tasks,
+        run_group_id=run_group_id,
     )
-    resolved_manifest_path = write_inversion_array_manifest(plan, manifest_path=manifest_path)
+    resolved_manifest_path = write_inversion_array_manifest(plan, manifest_path=manifest_path, run_group_id=run_group_id)
     return render_array_submission_payload(plan, manifest_path=resolved_manifest_path)
 
 
@@ -86,6 +89,7 @@ def plan_viirs_snpp_inversion_array_jobs(
     target_dates: tuple[str, ...] | list[str] = (),
     r0_year: int | None = None,
     max_concurrent_tasks: int | None = None,
+    run_group_id: str | None = None,
 ) -> SlurmArrayPlan:
     """Return the structured Slurm-array plan for VIIRS SNPP inversion dates."""
     return plan_viirs_snpp_inversion_array(
@@ -95,6 +99,7 @@ def plan_viirs_snpp_inversion_array_jobs(
         target_dates=target_dates,
         r0_year=r0_year,
         max_concurrent_tasks=max_concurrent_tasks,
+        run_group_id=run_group_id,
     )
 
 
@@ -217,7 +222,7 @@ def run_viirs_snpp_inversion_array_task(
 def scan_viirs_snpp_inversion_array(manifest_path: str):
     """Scan a manifest-backed inversion array for per-date outcomes."""
     report = scan_inversion_array_status(manifest_path)
-    write_status_summary_artifacts(manifest_path, report=report)
+    write_terminal_summary_artifacts(manifest_path)
     return report
 
 

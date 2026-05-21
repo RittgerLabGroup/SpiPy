@@ -19,7 +19,7 @@ from workflows.curc.slurm import (
     render_array_submission_payload_from_manifest,
     render_sbatch_command_for_array_payload,
 )
-from workflows.curc.status import scan_inversion_array_status, should_auto_retry, write_retry_manifest
+from workflows.curc.status import scan_inversion_array_status, should_auto_retry, write_retry_manifest, write_terminal_summary_artifacts
 from workflows.curc.task_manifest import load_inversion_array_manifest
 
 
@@ -61,17 +61,16 @@ def main(argv: list[str]) -> int:
         i += 1
 
     manifest_payload = load_inversion_array_manifest(manifest_path)
-    aggregate_log_path = manifest_path.parent / f"run_inversion_wy{manifest_payload['water_year']}_aggregate.log"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     auto_retry_log_path = manifest_path.parent / (manifest_path.stem + f"_auto_retry_{timestamp}.log")
     logger = configure_spires_file_logger(
         auto_retry_log_path,
         logger_name=f"spires.curc.auto_retry.{manifest_path.stem}",
         mode="a",
-        aggregate_log_path=aggregate_log_path,
     )
 
     report = scan_inversion_array_status(manifest_path)
+    summary_paths = write_terminal_summary_artifacts(manifest_path)
     rendered_report = asdict(report) if is_dataclass(report) else report
     should_retry = should_auto_retry(manifest_path)
     common_fields = {
@@ -101,6 +100,7 @@ def main(argv: list[str]) -> int:
     result: dict[str, object] = {
         "source_manifest_path": str(manifest_path),
         "report": rendered_report,
+        **summary_paths,
         "should_auto_retry": should_retry,
         "submitted": False,
     }

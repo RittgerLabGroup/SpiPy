@@ -6,6 +6,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
+from workflows.curc.paths import top_level_log_dir
 from workflows.curc.steps import InversionTaskPlan, SlurmArrayPlan
 
 
@@ -26,6 +27,7 @@ def write_inversion_array_manifest(
     plan: SlurmArrayPlan,
     *,
     manifest_path: str | Path | None = None,
+    run_group_id: str | None = None,
 ) -> Path:
     """Write an inversion array manifest to disk and return its resolved path."""
     resolved_path = (
@@ -34,6 +36,10 @@ def write_inversion_array_manifest(
         else Path(manifest_path).expanduser().resolve()
     )
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_run_group_id = resolved_path.parents[2].name if resolved_path.parent.name == "detailed_logs" else (
+        top_level_log_dir(resolved_path).name
+    )
+    tile_run_dir = resolved_path.parents[1] if resolved_path.parent.name == "detailed_logs" else resolved_path.parent
     payload = {
         "job_name": plan.job_name,
         "step": plan.step,
@@ -49,6 +55,10 @@ def write_inversion_array_manifest(
         "use_grouping": plan.use_grouping,
         "grouping_method": plan.grouping_method,
         "r0_year": plan.r0_year,
+        "run_group_id": resolved_run_group_id if run_group_id is None else run_group_id,
+        "run_group_dir": str(top_level_log_dir(resolved_path)),
+        "tile_run_dir": str(tile_run_dir),
+        "tile_detailed_log_dir": str(resolved_path.parent),
         "slurm_profile": plan.slurm_profile.to_payload(),
         "tasks": [asdict(task) for task in plan.tasks],
     }

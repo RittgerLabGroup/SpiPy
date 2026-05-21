@@ -7,7 +7,6 @@ from workflows.curc.paths import detailed_log_dir, top_level_log_dir
 from workflows.curc.runtime import (
     resolve_runtime_task_log_path,
     resolve_slurm_stdout_path,
-    resolve_water_year_aggregate_log_path,
 )
 from workflows.curc.status import _resolve_task_log_path
 from workflows.curc.steps import InversionTaskPlan
@@ -41,13 +40,6 @@ def test_runtime_log_path_uses_legacy_name_without_jobid(tmp_path: Path) -> None
     assert resolved.name == "run_inversion_2023-03-16.log"
 
 
-def test_water_year_aggregate_log_path(tmp_path: Path) -> None:
-    task = _task(tmp_path)
-    resolved = resolve_water_year_aggregate_log_path(task)
-    assert resolved.name == "run_inversion_wy2023_aggregate.log"
-    assert resolved.parent == Path(task.log_path).parent
-
-
 def test_resolve_slurm_stdout_path_from_manifest(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
@@ -71,10 +63,11 @@ def test_resolve_slurm_stdout_path_from_manifest(tmp_path: Path) -> None:
 
 
 def test_detailed_and_top_level_log_dir_helpers(tmp_path: Path) -> None:
-    top = tmp_path / "20260519_143044"
-    detailed = detailed_log_dir(top)
+    top = tmp_path / "20260519_143044_viirs_snpp_wy2023_full"
+    tile = top / "h08v05"
+    detailed = detailed_log_dir(tile)
 
-    assert detailed == top / "detailed_logs"
+    assert detailed == tile / "detailed_logs"
     assert top_level_log_dir(detailed) == top
     assert top_level_log_dir(detailed / "run_inversion_2023-03-16.log") == top
 
