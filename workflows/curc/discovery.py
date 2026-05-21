@@ -9,6 +9,12 @@ from workflows.curc.dates import iter_dates, parse_iso_date, water_year_bounds
 from workflows.curc.manifest import PlannedJob
 from spires.sensors.viirs.hdf import parse_viirs_surface_reflectance_filename
 
+VIIRS_PRODUCT_GLOB_BY_PLATFORM = {
+    "snpp": "VNP09GA*.h5",
+    "noaa20": "VJ109GA*.h5",
+    "noaa21": "VJ209GA*.h5",
+}
+
 
 def describe_discovery_scope(config: CurcWorkflowConfig, job: PlannedJob) -> dict[str, object]:
     """Return the future discovery scope for a planned CURC job.
@@ -27,39 +33,52 @@ def describe_discovery_scope(config: CurcWorkflowConfig, job: PlannedJob) -> dic
     }
 
 
-def viirs_snpp_source_root(config: CurcWorkflowConfig) -> Path:
-    """Return the configured source root for VIIRS SNPP VNP09GA files."""
+def _selected_viirs_platform(config: CurcWorkflowConfig) -> str:
     canonical = config.canonicalized()
     if canonical.sensor != "viirs":
-        raise ValueError("VIIRS SNPP discovery requires sensor='viirs'")
+        raise ValueError("VIIRS discovery requires sensor='viirs'")
+    if len(canonical.platforms) != 1:
+        raise ValueError(
+            "VIIRS discovery requires exactly one configured platform; "
+            f"got {canonical.platforms!r}"
+        )
+    platform = canonical.platforms[0]
+    if platform not in VIIRS_PRODUCT_GLOB_BY_PLATFORM:
+        raise ValueError(f"Unsupported VIIRS platform for discovery: {platform!r}")
+    return platform
+
+
+def discover_viirs_source_root(config: CurcWorkflowConfig) -> Path:
+    """Return the configured source root for one selected VIIRS platform."""
+    canonical = config.canonicalized()
+    _selected_viirs_platform(canonical)
     if canonical.input_source_root is None:
-        raise ValueError("VIIRS SNPP discovery requires input_source_root to be configured")
+        raise ValueError("VIIRS discovery requires input_source_root to be configured")
     return Path(canonical.input_source_root).expanduser().resolve()
 
 
-def viirs_snpp_source_tile_year_root(config: CurcWorkflowConfig, *, tile: str, year: int) -> Path:
-    """Return the calendar-year source directory for one VIIRS SNPP tile."""
-    return viirs_snpp_source_root(config) / "input" / tile / str(year)
+def viirs_source_tile_year_root(config: CurcWorkflowConfig, *, tile: str, year: int) -> Path:
+    """Return the calendar-year source directory for one VIIRS tile/platform."""
+    return discover_viirs_source_root(config) / "input" / tile / str(year)
 
 
-def _discover_vnp09ga_files_for_year(config: CurcWorkflowConfig, *, tile: str, year: int) -> list[Path]:
-    root = viirs_snpp_source_tile_year_root(config, tile=tile, year=year)
+def _discover_viirs_files_for_year(config: CurcWorkflowConfig, *, tile: str, year: int) -> list[Path]:
+    root = viirs_source_tile_year_root(config, tile=tile, year=year)
     if not root.exists():
         return []
-    return sorted(root.glob("VNP09GA*.h5"))
+    return sorted(root.glob(VIIRS_PRODUCT_GLOB_BY_PLATFORM[_selected_viirs_platform(config)]))
 
 
-def discover_viirs_snpp_reflectance_files(
+def discover_viirs_reflectance_files(
     config: CurcWorkflowConfig,
     *,
     tile: str,
     water_year: int | None = None,
     target_dates: tuple[str, ...] | list[str] = (),
 ) -> list[Path]:
-    """Discover VIIRS SNPP reflectance files for a water year or explicit dates."""
+    """Discover VIIRS reflectance files for one platform over a water year or explicit dates."""
     canonical = config.canonicalized()
-    if canonical.sensor != "viirs" or "snpp" not in canonical.platforms:
-        raise ValueError("This discovery helper is currently implemented only for VIIRS SNPP")
+    _selected_viirs_platform(canonical)
     if water_year is None and not target_dates:
         raise ValueError("Provide water_year or target_dates")
 
@@ -72,7 +91,7 @@ def discover_viirs_snpp_reflectance_files(
     candidate_years = sorted({day.year for day in selected_dates})
     files: list[Path] = []
     for year in candidate_years:
-        files.extend(_discover_vnp09ga_files_for_year(canonical, tile=tile, year=year))
+        files.extend(_discover_viirs_files_for_year(canonical, tile=tile, year=year))
 
     selected_files: list[Path] = []
     for path in files:
@@ -83,11 +102,47 @@ def discover_viirs_snpp_reflectance_files(
     return selected_files
 
 
+def discover_viirs_water_year_reflectance_files(
+    config: CurcWorkflowConfig,
+    *,
+    tile: str,
+    water_year: int,
+) -> list[Path]:
+    """Discover VIIRS reflectance files for one water year."""
+    return discover_viirs_reflectance_files(config, tile=tile, water_year=water_year)
+
+
+def viirs_snpp_source_root(config: CurcWorkflowConfig) -> Path:
+    """Backward-compatible alias for the selected VIIRS platform source root."""
+    return discover_viirs_source_root(config)
+
+
+def viirs_snpp_source_tile_year_root(config: CurcWorkflowConfig, *, tile: str, year: int) -> Path:
+    """Backward-compatible alias for the selected VIIRS platform tile/year source root."""
+    return viirs_source_tile_year_root(config, tile=tile, year=year)
+
+
+def discover_viirs_snpp_reflectance_files(
+    config: CurcWorkflowConfig,
+    *,
+    tile: str,
+    water_year: int | None = None,
+    target_dates: tuple[str, ...] | list[str] = (),
+) -> list[Path]:
+    """Backward-compatible alias for selected-platform VIIRS reflectance discovery."""
+    return discover_viirs_reflectance_files(
+        config,
+        tile=tile,
+        water_year=water_year,
+        target_dates=target_dates,
+    )
+
+
 def discover_viirs_snpp_water_year_reflectance_files(
     config: CurcWorkflowConfig,
     *,
     tile: str,
     water_year: int,
 ) -> list[Path]:
-    """Discover VIIRS SNPP reflectance files for one water year."""
-    return discover_viirs_snpp_reflectance_files(config, tile=tile, water_year=water_year)
+    """Backward-compatible alias for selected-platform VIIRS water-year discovery."""
+    return discover_viirs_water_year_reflectance_files(config, tile=tile, water_year=water_year)
