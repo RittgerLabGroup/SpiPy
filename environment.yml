@@ -30,6 +30,8 @@ dependencies:
   # Visualization
   - matplotlib
   - ipympl
+  - ipywidgets
+  - jupyterlab_widgets
   - ffmpeg
 
   # Development

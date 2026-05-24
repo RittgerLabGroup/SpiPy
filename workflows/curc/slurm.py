@@ -148,3 +148,43 @@ def render_sbatch_command_for_array_payload(
         wrapped_command,
     ]
     return command
+
+
+def render_sbatch_command_for_finalize_wrap(
+    *,
+    job_name: str,
+    wrapped_command: str,
+    stdout_path: str | Path,
+    slurm_profile: SlurmProfile | None = None,
+    dependencies: tuple[str, ...] = (),
+    extra_sbatch_args: tuple[str, ...] = (),
+) -> list[str]:
+    """Render an `sbatch` command for a single finalize-style wrapped command."""
+    profile = SlurmProfile() if slurm_profile is None else slurm_profile
+    slurm_args: list[str] = []
+    if profile.account:
+        slurm_args.extend(["--account", profile.account])
+    if profile.qos:
+        slurm_args.extend(["--qos", profile.qos])
+    if profile.time:
+        slurm_args.extend(["--time", profile.time])
+    if profile.mem:
+        slurm_args.extend(["--mem", profile.mem])
+    if profile.cpus_per_task is not None:
+        slurm_args.extend(["--cpus-per-task", str(profile.cpus_per_task)])
+    slurm_args.extend(profile.extra_args)
+    slurm_args.extend(extra_sbatch_args)
+    if dependencies:
+        slurm_args.extend(["--dependency", "afterany:" + ":".join(dependencies)])
+
+    return [
+        "sbatch",
+        "--parsable",
+        "--job-name",
+        job_name,
+        "--output",
+        str(Path(stdout_path).expanduser().resolve()),
+        *slurm_args,
+        "--wrap",
+        wrapped_command,
+    ]

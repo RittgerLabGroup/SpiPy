@@ -25,6 +25,7 @@ from workflows.curc.status import (
 from workflows.curc.slurm import (
     render_array_submission_payload_from_manifest,
     render_sbatch_command_for_array_payload,
+    render_sbatch_command_for_finalize_wrap,
 )
 from workflows.curc.steps import InversionTaskPlan, SlurmArrayPlan, WorkflowStepPlan
 from workflows.curc.task_manifest import (
@@ -57,6 +58,7 @@ __all__ = [
     "should_auto_retry",
     "render_array_submission_payload_from_manifest",
     "render_sbatch_command_for_array_payload",
+    "render_sbatch_command_for_finalize_wrap",
     "write_inversion_array_manifest",
     "write_status_summary_artifacts",
     "write_retry_manifest",

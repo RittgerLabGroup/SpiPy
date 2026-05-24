@@ -7,6 +7,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -17,9 +18,11 @@ if str(REPO_ROOT) not in sys.path:
 from spires.logging_utils import configure_spires_file_logger, log_event
 from workflows.curc.slurm import (
     render_array_submission_payload_from_manifest,
+    render_sbatch_command_for_finalize_wrap,
     render_sbatch_command_for_array_payload,
 )
-from workflows.curc.status import scan_inversion_array_status, write_terminal_summary_artifacts
+from workflows.curc.config import SlurmProfile
+from workflows.curc.status import scan_inversion_array_status
 from workflows.curc.task_manifest import load_inversion_array_manifest
 
 
@@ -27,13 +30,14 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
             "usage: submit_curc_inversion_array.py <manifest.json> "
-            "[--submit] [--python-exec <python>] [--execution-profile <name>] [--sbatch-arg <arg> ...]",
+            "[--submit] [--python-exec <python>] [--execution-profile <name>] [--no-finalize-job] [--sbatch-arg <arg> ...]",
             file=sys.stderr,
         )
         return 2
 
     manifest_path = Path(argv[1]).expanduser().resolve()
     submit = False
+    submit_finalize_job = True
     python_exec = "python"
     execution_profile = "cluster"
     extra_sbatch_args: list[str] = []
@@ -43,6 +47,8 @@ def main(argv: list[str]) -> int:
         token = argv[i]
         if token == "--submit":
             submit = True
+        elif token == "--no-finalize-job":
+            submit_finalize_job = False
         elif token == "--python-exec":
             i += 1
             python_exec = argv[i]
@@ -66,9 +72,9 @@ def main(argv: list[str]) -> int:
     )
 
     report = scan_inversion_array_status(manifest_path)
-    summary_paths = write_terminal_summary_artifacts(manifest_path)
     rendered_report = asdict(report) if is_dataclass(report) else report
     payload = render_array_submission_payload_from_manifest(manifest_path)
+    slurm_profile = SlurmProfile.from_payload(payload.get("slurm_profile"))
     sbatch_command = render_sbatch_command_for_array_payload(
         payload,
         repo_root=REPO_ROOT,
@@ -90,10 +96,10 @@ def main(argv: list[str]) -> int:
     result: dict[str, object] = {
         "manifest_path": str(manifest_path),
         "report": rendered_report,
-        **summary_paths,
         "payload": payload,
         "sbatch_command": sbatch_command,
         "submitted": False,
+        "finalize_job_submitted": False,
     }
 
     if submit:
@@ -106,6 +112,7 @@ def main(argv: list[str]) -> int:
         result["submitted"] = True
         result["sbatch_stdout"] = completed.stdout.strip()
         result["sbatch_stderr"] = completed.stderr.strip()
+        submitted_job_id = completed.stdout.strip().split(";")[0]
         log_event(
             logger,
             "curc_submit_inversion_array",
@@ -120,6 +127,34 @@ def main(argv: list[str]) -> int:
             sbatch_stderr=completed.stderr.strip(),
             **common_fields,
         )
+
+        if submit_finalize_job and submitted_job_id:
+            finalize_script = REPO_ROOT / "scripts" / "finalize_curc_tile_summary.py"
+            finalize_stdout = manifest_path.parent / f"{manifest_path.stem}_tile_finalize_%j.out"
+            finalize_command = " ".join(
+                [
+                    shlex.quote(str(python_exec)),
+                    shlex.quote(str(finalize_script)),
+                    shlex.quote(str(manifest_path)),
+                ]
+            )
+            finalize_sbatch_command = render_sbatch_command_for_finalize_wrap(
+                job_name=f"{payload['job_name']}-finalize",
+                wrapped_command=finalize_command,
+                stdout_path=finalize_stdout,
+                slurm_profile=slurm_profile,
+                dependencies=(submitted_job_id,),
+            )
+            finalize_completed = subprocess.run(
+                finalize_sbatch_command,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            result["finalize_job_submitted"] = True
+            result["finalize_sbatch_command"] = finalize_sbatch_command
+            result["finalize_sbatch_stdout"] = finalize_completed.stdout.strip()
+            result["finalize_sbatch_stderr"] = finalize_completed.stderr.strip()
 
     print(json.dumps(result, indent=2))
     return 0

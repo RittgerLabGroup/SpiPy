@@ -6,6 +6,35 @@ This note is the current implementation summary for the CURC-specific workflow c
 
 Archived historical notes live in `notes_curc_archive.md`.
 
+## Environment Setup
+
+- Load Miniforge before using `mamba`:
+  - `module load miniforge`
+- Use the `spipy14` environment for repo commands.
+- Interactive shell pattern:
+  - `module load miniforge`
+  - `mamba activate spipy14`
+- One-off command pattern:
+  - `module load miniforge && mamba run -n spipy14 <command>`
+- Python rule on this server:
+  - do not run bare `python3` for this repo
+  - run Python through `spipy14`, e.g.
+    - `module load miniforge && mamba run -n spipy14 python <...>`
+
+Build/import checks:
+
+- Build extension in-place:
+  - `module load miniforge && mamba run -n spipy14 python setup.py build_ext --inplace`
+- Verify imports:
+  - `module load miniforge && mamba run -n spipy14 python -c "import spires; print('imports_ok')"`
+
+If build fails, verify required packages in `spipy14`:
+
+- `swig`
+- `gxx`
+- `gcc`
+- `nlopt`
+
 ## Scope
 
 - The active CURC orchestration code lives in `workflows/curc/`.

@@ -171,6 +171,8 @@ def test_curc_status_summary_artifacts_capture_attempt_history(tmp_path: Path) -
     assert "wall_time_start_utc=2026-05-19T14:31:00Z" in summary
     assert "wall_time_end_utc=2026-05-19T14:32:00Z" in summary
     assert "total_wall_time_seconds=60.000 (00:01:00)" in summary
+    assert "submission_start_utc=2026-05-19T14:30:44Z" in summary
+    assert "submission_to_completion_wall_time_seconds=76.000 (00:01:16)" in summary
     assert "\nTOTALS\n" in summary
     assert "loaded_existing=1" in summary
     assert "completed=1" in summary
@@ -217,6 +219,8 @@ def test_run_group_summary_artifacts_merge_tiles(tmp_path: Path) -> None:
 
     summary = txt_path.read_text(encoding="utf-8")
     assert "RUN GROUP 20260519_143044_viirs_snpp_wy2023_full" in summary
+    assert "submission_start_utc=2026-05-19T14:30:44Z" in summary
+    assert "submission_to_completion_wall_time_seconds=76.000 (00:01:16)" in summary
     assert "\nPER-TILE TOTALS\n" in summary
     assert "h08v04" in summary
     assert "h08v05" in summary

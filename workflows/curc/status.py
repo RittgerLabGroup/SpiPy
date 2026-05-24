@@ -19,6 +19,7 @@ from workflows.curc.task_manifest import load_inversion_array_manifest
 SUMMARY_EVENT_NAME = "curc_run_viirs_snpp_inversion_task"
 _FIELD_RE = re.compile(r'([A-Za-z0-9_]+)=(".*?"|\{.*?\}|\[.*?\]|[^ ]+)')
 _TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})")
+_RUN_GROUP_TS_RE = re.compile(r"^(\d{8}_\d{6})_")
 
 
 def _inversion_output_dataset_path(task: InversionTaskPlan) -> Path:
@@ -475,6 +476,26 @@ def _attempts_wall_time(attempts: tuple[InversionTaskAttempt, ...]) -> tuple[dat
     return wall_time_start, wall_time_end, wall_time_seconds
 
 
+def _run_group_start_from_id(run_group_id: str) -> datetime | None:
+    match = _RUN_GROUP_TS_RE.match(run_group_id)
+    if match is None:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+
+
+def _submission_to_completion_seconds(
+    run_group_id: str,
+    completion_time: datetime | None,
+) -> tuple[datetime | None, float | None]:
+    submission_start = _run_group_start_from_id(run_group_id)
+    if submission_start is None or completion_time is None:
+        return submission_start, None
+    return submission_start, round((completion_time - submission_start).total_seconds(), 3)
+
+
 def _final_attempts(attempts: tuple[InversionTaskAttempt, ...]) -> list[InversionTaskAttempt]:
     return sorted((attempt for attempt in attempts if attempt.last_attempt_for_date), key=lambda attempt: (attempt.tile, attempt.scene_date))
 
@@ -536,11 +557,13 @@ def _render_tile_summary_lines(
     totals = _totals_from_final_attempts(final_attempts)
     attempts_per_date = _attempts_per_date(attempts)
     wall_time_start, wall_time_end, wall_time_seconds = _attempts_wall_time(attempts)
+    run_group_id = str(manifest_payload.get("run_group_id", _manifest_run_group_dir(manifest_payload, manifest_path).name))
+    submission_start, submission_to_completion_seconds = _submission_to_completion_seconds(run_group_id, wall_time_end)
     tile_dir = _manifest_tile_run_dir(manifest_payload, manifest_path)
 
     lines = [
         f"TILE {manifest_payload['tile']} WATER YEAR {manifest_payload['water_year']}",
-        f"run_group_id={manifest_payload.get('run_group_id', _manifest_run_group_dir(manifest_payload, manifest_path).name)}",
+        f"run_group_id={run_group_id}",
         f"sensor={manifest_payload['sensor']} platform={manifest_payload['platform']} tile={manifest_payload['tile']}",
         f"tile_dir={tile_dir}",
         f"manifest={manifest_path}",
@@ -550,6 +573,13 @@ def _render_tile_summary_lines(
             f"total_wall_time_seconds={wall_time_seconds:.3f} ({_format_elapsed_seconds(wall_time_seconds)})"
             if wall_time_seconds is not None
             else "total_wall_time_seconds=unknown"
+        ),
+        f"submission_start_utc={submission_start.isoformat(timespec='seconds') + 'Z' if submission_start is not None else 'unknown'}",
+        (
+            "submission_to_completion_wall_time_seconds="
+            f"{submission_to_completion_seconds:.3f} ({_format_elapsed_seconds(submission_to_completion_seconds)})"
+            if submission_to_completion_seconds is not None
+            else "submission_to_completion_wall_time_seconds=unknown"
         ),
         "",
         "TOTALS",
@@ -679,6 +709,8 @@ def _render_group_summary_lines(
     totals = _totals_from_final_attempts(final_attempts)
     attempts_per_date = _attempts_per_date(attempts)
     wall_time_start, wall_time_end, wall_time_seconds = _attempts_wall_time(attempts)
+    run_group_id = str(manifest_payload.get("run_group_id", run_group_dir.name))
+    submission_start, submission_to_completion_seconds = _submission_to_completion_seconds(run_group_id, wall_time_end)
     tiles = sorted({attempt.tile for attempt in attempts})
 
     per_tile_totals: list[tuple[str, dict[str, int]]] = []
@@ -687,7 +719,7 @@ def _render_group_summary_lines(
         per_tile_totals.append((tile, _totals_from_final_attempts(tile_final_attempts)))
 
     lines = [
-        f"RUN GROUP {manifest_payload.get('run_group_id', run_group_dir.name)}",
+        f"RUN GROUP {run_group_id}",
         f"sensor={manifest_payload['sensor']} platform={manifest_payload['platform']} water_year={manifest_payload['water_year']}",
         f"scope={manifest_payload.get('scope_kind', 'unknown')}",
         f"run_group_dir={run_group_dir}",
@@ -698,6 +730,13 @@ def _render_group_summary_lines(
             f"total_wall_time_seconds={wall_time_seconds:.3f} ({_format_elapsed_seconds(wall_time_seconds)})"
             if wall_time_seconds is not None
             else "total_wall_time_seconds=unknown"
+        ),
+        f"submission_start_utc={submission_start.isoformat(timespec='seconds') + 'Z' if submission_start is not None else 'unknown'}",
+        (
+            "submission_to_completion_wall_time_seconds="
+            f"{submission_to_completion_seconds:.3f} ({_format_elapsed_seconds(submission_to_completion_seconds)})"
+            if submission_to_completion_seconds is not None
+            else "submission_to_completion_wall_time_seconds=unknown"
         ),
         "",
         "TOTALS",
