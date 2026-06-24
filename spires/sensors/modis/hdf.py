@@ -230,7 +230,15 @@ def _build_component_masks(
         | mask_cloud_for_inversion
         | mask_cloud_shadow_for_inversion
     )
-    valid_r0_mask = valid_inversion_mask & (~mask_snow)
+    valid_r0_mask = ~(
+        mask_invalid_reflectance
+        | mask_bad_geometry
+        | mask_low_observation_support
+        | mask_bad_modland_qa
+        | mask_cloud
+        | mask_cloud_shadow
+        | mask_snow
+    )
 
     return xr.Dataset(
         data_vars={

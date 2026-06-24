@@ -276,7 +276,30 @@ def test_prepare_viirs_scene_for_inversion_can_ignore_cloud_mask_for_inversion()
     assert bool(relaxed["mask_cloud"].all())
     assert not bool(relaxed["mask_cloud_for_inversion"].any())
     assert bool(relaxed["valid_inversion_mask"].all())
+    assert not bool(relaxed["valid_r0_mask"].any())
     assert relaxed.attrs["cloud_mask_policy"] == "ignore_cloud"
+
+
+def test_prepare_viirs_scene_for_inversion_keeps_water_valid_for_r0():
+    raw = build_mock_viirs_raw_dataset()
+    raw["land_water_mask"] = xr.zeros_like(raw["land_water_mask"])
+
+    ds = prepare_viirs_scene_for_inversion(raw)
+
+    assert bool(ds["mask_water"].all())
+    assert not bool(ds["valid_inversion_mask"].any())
+    assert bool(ds["valid_r0_mask"].all())
+
+
+def test_prepare_viirs_scene_for_inversion_treats_deep_ocean_as_water():
+    raw = build_mock_viirs_raw_dataset()
+    raw["land_water_mask"] = xr.full_like(raw["land_water_mask"], 7)
+
+    ds = prepare_viirs_scene_for_inversion(raw)
+
+    assert bool(ds["mask_water"].all())
+    assert not bool(ds["valid_inversion_mask"].any())
+    assert bool(ds["valid_r0_mask"].all())
 
 
 def test_open_viirs_surface_reflectance_reads_only_requested_lut_bands(tmp_path):

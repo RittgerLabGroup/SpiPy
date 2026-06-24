@@ -63,5 +63,7 @@ def test_build_modis_timeseries_can_write_reduced_stack_to_zarr(tmp_path):
     )
 
     assert zarr_path.exists()
-    assert {"reflectance", "sensor_zenith", "valid_r0_mask"}.issubset(timeseries.data_vars)
+    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "solar_zenith", "solar_azimuth", "valid_r0_mask"}.issubset(
+        timeseries.data_vars
+    )
     assert timeseries.sizes["time"] == 2

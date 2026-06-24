@@ -243,10 +243,13 @@ def execute_viirs_snpp_workflow_step(
         )
         preview["executed"] = True
         preview["output_dataset_path"] = str(output_dataset_path)
-        preview["dataset_attrs"] = dataset.attrs.copy()
-        preview["dataset_sizes"] = dict(dataset.sizes)
-        del dataset
-        gc.collect()
+        try:
+            preview["dataset_attrs"] = dataset.attrs.copy()
+            preview["dataset_sizes"] = dict(dataset.sizes)
+        finally:
+            dataset.close()
+            del dataset
+            gc.collect()
         return preview
 
     if step_plan.step == "run_inversion":

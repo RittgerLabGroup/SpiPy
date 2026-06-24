@@ -19,6 +19,9 @@ def build_mock_prepared_scene(
     *,
     sensor_zenith: np.ndarray | None = None,
     sensor_azimuth: np.ndarray | None = None,
+    solar_zenith: np.ndarray | None = None,
+    solar_azimuth: np.ndarray | None = None,
+    mask_water: np.ndarray | None = None,
 ) -> xr.Dataset:
     band_names = ["I1", "I2", "I3", "M2", "M4", "M8", "M11"]
     reflectance = xr.DataArray(
@@ -28,15 +31,24 @@ def build_mock_prepared_scene(
     )
     zenith_values = np.array([[10.0, 10.0]], dtype=np.float32) if sensor_zenith is None else sensor_zenith.astype(np.float32)
     azimuth_values = np.array([[0.0, 90.0]], dtype=np.float32) if sensor_azimuth is None else sensor_azimuth.astype(np.float32)
+    solar_zenith_values = np.array([[45.0, 45.0]], dtype=np.float32) if solar_zenith is None else solar_zenith.astype(np.float32)
+    solar_azimuth_values = np.array([[180.0, 180.0]], dtype=np.float32) if solar_azimuth is None else solar_azimuth.astype(np.float32)
     zenith = xr.DataArray(zenith_values, dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
     azimuth = xr.DataArray(azimuth_values, dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
+    sun_zenith = xr.DataArray(solar_zenith_values, dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
+    sun_azimuth = xr.DataArray(solar_azimuth_values, dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
     valid_mask = xr.DataArray(np.array([[True, True]]), dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
+    water_values = np.zeros((1, 2), dtype=bool) if mask_water is None else mask_water.astype(bool)
+    water_mask = xr.DataArray(water_values, dims=("y", "x"), coords={"y": [0], "x": [0, 1]})
     return xr.Dataset(
         data_vars={
             "reflectance": reflectance,
             "sensor_zenith": zenith,
             "sensor_azimuth": azimuth,
+            "solar_zenith": sun_zenith,
+            "solar_azimuth": sun_azimuth,
             "valid_r0_mask": valid_mask,
+            "mask_water": water_mask,
         },
         coords={"y": [0], "x": [0, 1], "band": band_names},
         attrs={"acquisition_date": acquisition_date},
@@ -172,6 +184,77 @@ def test_build_viirs_r0_prefers_near_nadir_candidate_when_ndvi_is_within_epsilon
     assert np.isclose(r0["r0_sensor_azimuth"].isel(y=0, x=0).item(), 5.0)
 
 
+def test_build_viirs_r0_falls_back_to_min_blue_when_negative_ndsi_ndvi_is_invalid():
+    scene_1 = build_mock_prepared_scene(
+        "2026-06-01",
+        np.array(
+            [
+                [0.0, 0.0, 0.4, 0.30, 0.2, 0.4, 0.4],
+                [0.0, 0.0, 0.4, 0.30, 0.2, 0.4, 0.4],
+            ],
+            dtype=np.float32,
+        ),
+    )
+    scene_2 = build_mock_prepared_scene(
+        "2026-07-01",
+        np.array(
+            [
+                [0.0, 0.0, 0.1, 0.20, 0.4, 0.4, 0.4],
+                [0.0, 0.0, 0.1, 0.20, 0.4, 0.4, 0.4],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+    r0 = build_viirs_r0(build_viirs_timeseries([scene_1, scene_2]))
+
+    assert not bool(r0["has_negative_ndsi"].isel(y=0, x=0))
+    assert bool(r0["r0_used_min_blue_rule"].isel(y=0, x=0))
+    assert r0["r0_source_index"].isel(y=0, x=0).item() == 1
+    np.testing.assert_allclose(
+        r0["r0_reflectance"].isel(y=0, x=0).values,
+        scene_2["reflectance"].isel(y=0, x=0).values,
+    )
+
+
+def test_build_viirs_r0_uses_dark_water_fallback_when_blue_is_below_land_threshold():
+    scene_1 = build_mock_prepared_scene(
+        "2026-06-01",
+        np.array(
+            [
+                [0.02, 0.03, 0.02, 0.06, 0.05, 0.03, 0.04],
+                [0.02, 0.03, 0.02, 0.06, 0.05, 0.03, 0.04],
+            ],
+            dtype=np.float32,
+        ),
+        mask_water=np.array([[True, False]]),
+    )
+    scene_2 = build_mock_prepared_scene(
+        "2026-07-01",
+        np.array(
+            [
+                [0.02, 0.03, 0.02, 0.05, 0.05, 0.03, 0.04],
+                [0.02, 0.03, 0.02, 0.05, 0.05, 0.03, 0.04],
+            ],
+            dtype=np.float32,
+        ),
+        mask_water=np.array([[True, False]]),
+    )
+
+    r0 = build_viirs_r0(build_viirs_timeseries([scene_1, scene_2]))
+
+    assert r0["r0_source_index"].isel(y=0, x=0).item() == 1
+    assert bool(r0["r0_used_min_blue_rule"].isel(y=0, x=0))
+    assert bool(r0["r0_used_water_blue_rule"].isel(y=0, x=0))
+    np.testing.assert_allclose(
+        r0["r0_reflectance"].isel(y=0, x=0).values,
+        scene_2["reflectance"].isel(y=0, x=0).values,
+    )
+
+    assert r0["r0_source_index"].isel(y=0, x=1).item() == -1
+    assert np.isnan(r0["r0_reflectance"].isel(y=0, x=1).values).all()
+
+
 def test_build_viirs_timeseries_concatenates_prepared_scenes_by_time():
     scene_2 = build_mock_prepared_scene("2026-07-01", np.full((2, 7), 0.2, dtype=np.float32))
     scene_1 = build_mock_prepared_scene("2026-06-01", np.full((2, 7), 0.1, dtype=np.float32))
@@ -195,7 +278,9 @@ def test_reduce_viirs_prepared_scene_for_r0_keeps_only_required_variables():
 
     reduced = reduce_viirs_prepared_scene_for_r0(scene)
 
-    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "valid_r0_mask"}.issubset(reduced.data_vars)
+    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "solar_zenith", "solar_azimuth", "valid_r0_mask"}.issubset(
+        reduced.data_vars
+    )
 
 
 def test_build_viirs_timeseries_can_keep_only_r0_variables():
@@ -206,7 +291,9 @@ def test_build_viirs_timeseries_can_keep_only_r0_variables():
 
     timeseries = build_viirs_timeseries([scene_1, scene_2], keep_variables="r0")
 
-    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "valid_r0_mask"}.issubset(timeseries.data_vars)
+    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "solar_zenith", "solar_azimuth", "valid_r0_mask"}.issubset(
+        timeseries.data_vars
+    )
 
 
 def test_build_viirs_timeseries_can_write_reduced_stack_to_zarr(tmp_path):
@@ -222,7 +309,9 @@ def test_build_viirs_timeseries_can_write_reduced_stack_to_zarr(tmp_path):
     )
 
     assert zarr_path.exists()
-    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "valid_r0_mask"}.issubset(timeseries.data_vars)
+    assert {"reflectance", "sensor_zenith", "sensor_azimuth", "solar_zenith", "solar_azimuth", "valid_r0_mask"}.issubset(
+        timeseries.data_vars
+    )
     assert timeseries.sizes["time"] == 2
 
 
@@ -259,7 +348,7 @@ def test_unified_viirs_r0_from_sources_matches_timeseries_builder():
     )
 
 
-def test_build_viirs_r0_writes_selected_sensor_angles():
+def test_build_viirs_r0_writes_selected_geometry_angles():
     scene_1 = build_mock_prepared_scene(
         "2026-06-01",
         np.array(
@@ -271,6 +360,8 @@ def test_build_viirs_r0_writes_selected_sensor_angles():
         ),
         sensor_zenith=np.array([[12.0, 14.0]], dtype=np.float32),
         sensor_azimuth=np.array([[25.0, 35.0]], dtype=np.float32),
+        solar_zenith=np.array([[42.0, 44.0]], dtype=np.float32),
+        solar_azimuth=np.array([[125.0, 135.0]], dtype=np.float32),
     )
     scene_2 = build_mock_prepared_scene(
         "2026-07-01",
@@ -283,14 +374,20 @@ def test_build_viirs_r0_writes_selected_sensor_angles():
         ),
         sensor_zenith=np.array([[18.0, 20.0]], dtype=np.float32),
         sensor_azimuth=np.array([[55.0, 65.0]], dtype=np.float32),
+        solar_zenith=np.array([[48.0, 50.0]], dtype=np.float32),
+        solar_azimuth=np.array([[155.0, 165.0]], dtype=np.float32),
     )
 
     r0 = build_viirs_r0(build_viirs_timeseries([scene_1, scene_2]))
 
     assert np.isclose(r0["r0_sensor_zenith"].isel(y=0, x=0).item(), 18.0)
     assert np.isclose(r0["r0_sensor_azimuth"].isel(y=0, x=0).item(), 55.0)
+    assert np.isclose(r0["r0_solar_zenith"].isel(y=0, x=0).item(), 48.0)
+    assert np.isclose(r0["r0_solar_azimuth"].isel(y=0, x=0).item(), 155.0)
     assert np.isclose(r0["r0_sensor_zenith"].isel(y=0, x=1).item(), 14.0)
     assert np.isclose(r0["r0_sensor_azimuth"].isel(y=0, x=1).item(), 35.0)
+    assert np.isclose(r0["r0_solar_zenith"].isel(y=0, x=1).item(), 44.0)
+    assert np.isclose(r0["r0_solar_azimuth"].isel(y=0, x=1).item(), 135.0)
 
 
 def test_unified_viirs_r0_from_sources_loads_existing_file_and_logs_path(tmp_path):
@@ -370,6 +467,21 @@ def test_build_viirs_r0_accepts_chunked_timeseries():
         da.from_array(timeseries["sensor_zenith"].values, chunks=(2, 1, 1)),
         dims=timeseries["sensor_zenith"].dims,
         coords=timeseries["sensor_zenith"].coords,
+    )
+    chunked["sensor_azimuth"] = xr.DataArray(
+        da.from_array(timeseries["sensor_azimuth"].values, chunks=(2, 1, 1)),
+        dims=timeseries["sensor_azimuth"].dims,
+        coords=timeseries["sensor_azimuth"].coords,
+    )
+    chunked["solar_zenith"] = xr.DataArray(
+        da.from_array(timeseries["solar_zenith"].values, chunks=(2, 1, 1)),
+        dims=timeseries["solar_zenith"].dims,
+        coords=timeseries["solar_zenith"].coords,
+    )
+    chunked["solar_azimuth"] = xr.DataArray(
+        da.from_array(timeseries["solar_azimuth"].values, chunks=(2, 1, 1)),
+        dims=timeseries["solar_azimuth"].dims,
+        coords=timeseries["solar_azimuth"].coords,
     )
     chunked["valid_r0_mask"] = xr.DataArray(
         da.from_array(timeseries["valid_r0_mask"].values, chunks=(2, 1, 1)),

@@ -149,4 +149,16 @@ def test_prepare_modis_scene_for_inversion_can_ignore_cloud_mask_for_inversion()
     assert bool(relaxed["mask_cloud"].all())
     assert not bool(relaxed["mask_cloud_for_inversion"].any())
     assert bool(relaxed["valid_inversion_mask"].all())
+    assert not bool(relaxed["valid_r0_mask"].any())
     assert relaxed.attrs["cloud_mask_policy"] == "ignore_cloud"
+
+
+def test_prepare_modis_scene_for_inversion_keeps_water_valid_for_r0():
+    raw = build_mock_modis_raw_dataset()
+    raw["state_1km"] = xr.zeros_like(raw["state_1km"])
+
+    ds = prepare_modis_scene_for_inversion(raw)
+
+    assert bool(ds["mask_water"].all())
+    assert not bool(ds["valid_inversion_mask"].any())
+    assert bool(ds["valid_r0_mask"].all())

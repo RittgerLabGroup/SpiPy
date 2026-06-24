@@ -28,7 +28,10 @@ MODIS_R0_STAGING_VARIABLES = (
     "reflectance",
     "sensor_zenith",
     "sensor_azimuth",
+    "solar_zenith",
+    "solar_azimuth",
     "valid_r0_mask",
+    "mask_water",
 )
 LOGGER = logging.getLogger(__name__)
 

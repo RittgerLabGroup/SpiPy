@@ -25,6 +25,10 @@ R0_REQUIRED_VARS = (
     "r0_source_time",
     "r0_used_min_blue_rule",
     "r0_count",
+    "r0_sensor_zenith",
+    "r0_sensor_azimuth",
+    "r0_solar_zenith",
+    "r0_solar_azimuth",
 )
 R0_EXCLUDED_DATASET_ATTRS = {
     "acquisition_date",
@@ -75,9 +79,8 @@ def infer_source_date_bounds(
 
 def safe_normalized_difference(numerator: xr.DataArray, denominator: xr.DataArray) -> xr.DataArray:
     total = numerator + denominator
-    with np.errstate(divide="ignore", invalid="ignore"):
-        normalized_difference = (numerator - denominator) / total
-    return normalized_difference.where(total != 0, np.nan)
+    safe_total = total.where(total != 0)
+    return (numerator - denominator) / safe_total
 
 
 def scalar_dataarray_to_float(value: xr.DataArray) -> float:
@@ -129,7 +132,16 @@ def validate_r0_dataset(
 
     if dataset["r0_reflectance"].dims != ("y", "x", "band"):
         raise ValueError(f"Unexpected r0_reflectance dims: {dataset['r0_reflectance'].dims}")
-    for name in ("r0_source_index", "r0_source_time", "r0_used_min_blue_rule", "r0_count"):
+    for name in (
+        "r0_source_index",
+        "r0_source_time",
+        "r0_used_min_blue_rule",
+        "r0_count",
+        "r0_sensor_zenith",
+        "r0_sensor_azimuth",
+        "r0_solar_zenith",
+        "r0_solar_azimuth",
+    ):
         if dataset[name].dims != ("y", "x"):
             raise ValueError(f"Unexpected {name} dims: {dataset[name].dims}")
 
@@ -246,14 +258,18 @@ def compute_r0_indices(
     swir = reflectance.sel(band=ndsi_swir_band)
     blue = reflectance.sel(band=blue_band)
 
-    ndvi = safe_normalized_difference(nir, red).where(valid_r0_mask & low_zenith).rename("ndvi")
-    ndsi = safe_normalized_difference(visible, swir).where(low_zenith).rename("ndsi")
-    blue_metric = blue.where(blue >= min_blue_reflectance).where(low_zenith).rename("blue_metric")
+    valid_low_zenith = valid_r0_mask & low_zenith
+
+    ndvi = safe_normalized_difference(nir.where(valid_low_zenith), red.where(valid_low_zenith)).rename("ndvi")
+    ndsi = safe_normalized_difference(visible.where(valid_low_zenith), swir.where(valid_low_zenith)).rename("ndsi")
+    raw_blue_metric = blue.where(valid_low_zenith).rename("raw_blue_metric")
+    blue_metric = raw_blue_metric.where(raw_blue_metric >= min_blue_reflectance).rename("blue_metric")
 
     return xr.Dataset(
         data_vars={
             "ndvi": ndvi,
             "ndsi": ndsi,
+            "raw_blue_metric": raw_blue_metric,
             "blue_metric": blue_metric,
             "r0_low_sensor_zenith_mask": low_zenith.astype(bool),
         }
@@ -285,22 +301,30 @@ def build_r0_candidate_metrics(
     valid_r0_mask = prepared_timeseries["valid_r0_mask"]
     ndsi = indices_ds["ndsi"]
     ndvi = indices_ds["ndvi"]
+    raw_blue_metric = indices_ds["raw_blue_metric"]
     blue_metric = indices_ds["blue_metric"]
+    mask_water = prepared_timeseries.get("mask_water")
+    if mask_water is None:
+        mask_water = xr.zeros_like(valid_r0_mask, dtype=bool)
 
-    has_negative_ndsi = (ndsi < 0).any(dim="time")
     candidate_negative_ndsi_mask = valid_r0_mask & (ndsi < 0)
     candidate_blue_mask = valid_r0_mask & blue_metric.notnull()
+    candidate_water_blue_mask = valid_r0_mask & mask_water.astype(bool) & raw_blue_metric.notnull()
 
     candidate_ndvi = ndvi.where(candidate_negative_ndsi_mask)
     candidate_blue_metric = blue_metric.where(candidate_blue_mask)
+    candidate_water_blue_metric = raw_blue_metric.where(candidate_water_blue_mask)
+    has_negative_ndsi = candidate_ndvi.notnull().any(dim="time")
 
     return xr.Dataset(
         data_vars={
             **indices_ds.data_vars,
             "candidate_ndvi": candidate_ndvi,
             "candidate_blue_metric": candidate_blue_metric,
+            "candidate_water_blue_metric": candidate_water_blue_metric,
             "candidate_negative_ndsi_mask": candidate_negative_ndsi_mask.astype(bool),
             "candidate_blue_mask": candidate_blue_mask.astype(bool),
+            "candidate_water_blue_mask": candidate_water_blue_mask.astype(bool),
             "has_negative_ndsi": has_negative_ndsi.astype(bool),
         }
     )
@@ -401,9 +425,12 @@ def build_r0(
     ndsi = candidate_ds["ndsi"]
     candidate_ndvi = candidate_ds["candidate_ndvi"]
     candidate_blue_metric = candidate_ds["candidate_blue_metric"]
+    candidate_water_blue_metric = candidate_ds["candidate_water_blue_metric"]
     has_negative_ndsi = candidate_ds["has_negative_ndsi"]
     sensor_zenith = prepared_timeseries["sensor_zenith"]
     sensor_azimuth = prepared_timeseries["sensor_azimuth"]
+    solar_zenith = prepared_timeseries["solar_zenith"]
+    solar_azimuth = prepared_timeseries["solar_azimuth"]
     ndvi_near_max_threshold = candidate_ndvi.max(dim="time", skipna=True) - np.float32(ndvi_tie_epsilon)
     near_max_ndvi_mask = candidate_ndvi >= ndvi_near_max_threshold
     view_geometry_tiebreak_metric = build_view_geometry_tiebreak_metric(sensor_zenith, sensor_azimuth)
@@ -411,26 +438,31 @@ def build_r0(
 
     idx_max_ndvi, invalid_ndvi = select_time_indices(candidate_ndvi_tiebreak_metric, mode="min")
     idx_min_blue, invalid_blue = select_time_indices(candidate_blue_metric, mode="min")
-
-    reflectance = prepared_timeseries["reflectance"]
-    spectra_from_max_ndvi = gather_values_by_index(reflectance, idx_max_ndvi, invalid_ndvi).astype(np.float32)
-    spectra_from_min_blue = gather_values_by_index(reflectance, idx_min_blue, invalid_blue).astype(np.float32)
-    sensor_zenith_from_max_ndvi = gather_values_by_index(sensor_zenith, idx_max_ndvi, invalid_ndvi).astype(np.float32)
-    sensor_zenith_from_min_blue = gather_values_by_index(sensor_zenith, idx_min_blue, invalid_blue).astype(np.float32)
-    sensor_azimuth_from_max_ndvi = gather_values_by_index(sensor_azimuth, idx_max_ndvi, invalid_ndvi).astype(np.float32)
-    sensor_azimuth_from_min_blue = gather_values_by_index(sensor_azimuth, idx_min_blue, invalid_blue).astype(np.float32)
+    idx_min_water_blue, invalid_water_blue = select_time_indices(candidate_water_blue_metric, mode="min")
 
     min_ndsi = ndsi.min(dim="time", skipna=True)
     max_ndvi = candidate_ndvi.max(dim="time", skipna=True)
     min_blue = candidate_blue_metric.min(dim="time", skipna=True)
+    min_water_blue = candidate_water_blue_metric.min(dim="time", skipna=True)
 
-    use_min_blue = (~has_negative_ndsi).fillna(False).astype(bool)
-    invalid_final = xr.where(use_min_blue, invalid_blue, invalid_ndvi)
-    r0_values = xr.where(use_min_blue, spectra_from_min_blue, spectra_from_max_ndvi).where(~invalid_final).astype(np.float32)
-    r0_sensor_zenith = xr.where(use_min_blue, sensor_zenith_from_min_blue, sensor_zenith_from_max_ndvi).where(~invalid_final).astype(np.float32)
-    r0_sensor_azimuth = xr.where(use_min_blue, sensor_azimuth_from_min_blue, sensor_azimuth_from_max_ndvi).where(~invalid_final).astype(np.float32)
+    use_max_ndvi = has_negative_ndsi.fillna(False).astype(bool) & (~invalid_ndvi)
+    use_min_blue = (~use_max_ndvi) & (~invalid_blue)
+    use_min_water_blue = (~use_max_ndvi) & invalid_blue & (~invalid_water_blue)
+    invalid_final = ~(use_max_ndvi | use_min_blue | use_min_water_blue)
 
-    source_index = xr.where(use_min_blue, idx_min_blue, idx_max_ndvi).where(~invalid_final, other=-1).astype(np.int32)
+    source_index = xr.where(
+        use_max_ndvi,
+        idx_max_ndvi,
+        xr.where(use_min_blue, idx_min_blue, idx_min_water_blue),
+    ).where(~invalid_final, other=-1).astype(np.int32)
+
+    reflectance = prepared_timeseries["reflectance"]
+    r0_values = gather_values_by_index(reflectance, source_index, invalid_final).astype(np.float32)
+    r0_sensor_zenith = gather_values_by_index(sensor_zenith, source_index, invalid_final).astype(np.float32)
+    r0_sensor_azimuth = gather_values_by_index(sensor_azimuth, source_index, invalid_final).astype(np.float32)
+    r0_solar_zenith = gather_values_by_index(solar_zenith, source_index, invalid_final).astype(np.float32)
+    r0_solar_azimuth = gather_values_by_index(solar_azimuth, source_index, invalid_final).astype(np.float32)
+
     safe_source_index = xr.DataArray(
         source_index.data,
         dims=source_index.dims,
@@ -443,7 +475,9 @@ def build_r0(
 
     valid_count = prepared_timeseries["valid_r0_mask"].sum(dim="time").astype(np.int32)
     time_values = prepared_timeseries["time"].values
-    used_min_blue_fraction = scalar_dataarray_to_float(use_min_blue.mean()) if use_min_blue.size else float("nan")
+    used_any_min_blue = use_min_blue | use_min_water_blue
+    used_min_blue_fraction = scalar_dataarray_to_float(used_any_min_blue.mean()) if used_any_min_blue.size else float("nan")
+    used_water_blue_fraction = scalar_dataarray_to_float(use_min_water_blue.mean()) if use_min_water_blue.size else float("nan")
     valid_source = source_index >= 0
     valid_source_fraction = scalar_dataarray_to_float(valid_source.mean()) if valid_source.size else float("nan")
 
@@ -465,16 +499,24 @@ def build_r0(
                 coords={"y": prepared_timeseries["y"].values, "x": prepared_timeseries["x"].values},
             ),
             "r0_used_min_blue_rule": xr.DataArray(
-                use_min_blue.data,
+                used_any_min_blue.data,
+                dims=("y", "x"),
+                coords={"y": prepared_timeseries["y"].values, "x": prepared_timeseries["x"].values},
+            ),
+            "r0_used_water_blue_rule": xr.DataArray(
+                use_min_water_blue.data,
                 dims=("y", "x"),
                 coords={"y": prepared_timeseries["y"].values, "x": prepared_timeseries["x"].values},
             ),
             "r0_count": valid_count.astype(np.int32),
             "r0_sensor_zenith": r0_sensor_zenith,
             "r0_sensor_azimuth": r0_sensor_azimuth,
+            "r0_solar_zenith": r0_solar_zenith,
+            "r0_solar_azimuth": r0_solar_azimuth,
             "max_ndvi": max_ndvi,
             "min_ndsi": min_ndsi,
             "min_blue_metric": min_blue,
+            "min_water_blue_metric": min_water_blue,
             "has_negative_ndsi": has_negative_ndsi,
         },
         attrs=prepared_timeseries.attrs.copy(),
@@ -493,6 +535,7 @@ def build_r0(
         output_shape=list(result["r0_reflectance"].shape),
         ndvi_tie_epsilon=ndvi_tie_epsilon,
         used_min_blue_fraction=round(used_min_blue_fraction, 6),
+        used_water_blue_fraction=round(used_water_blue_fraction, 6),
         valid_source_fraction=round(valid_source_fraction, 6),
         mean_r0_count=round(scalar_dataarray_to_float(valid_count.mean()), 6),
     )

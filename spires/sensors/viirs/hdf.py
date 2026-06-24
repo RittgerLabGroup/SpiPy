@@ -396,7 +396,14 @@ def _build_component_masks(
         | mask_cloud_for_inversion
         | mask_cloud_shadow_for_inversion
     )
-    valid_r0_mask = valid_inversion_mask & (~mask_snow)
+    valid_r0_mask = ~(
+        mask_invalid_reflectance
+        | mask_bad_geometry
+        | mask_low_observation_support
+        | mask_cloud
+        | mask_cloud_shadow
+        | mask_snow
+    )
 
     return xr.Dataset(
         data_vars={
@@ -429,7 +436,7 @@ def prepare_viirs_scene_for_inversion(
     max_solar_zenith: float = 85.0,
     min_obs_1km: int = 1,
     min_obs_500m: int = 1,
-    water_mask_values: tuple[int, ...] = (0,),
+    water_mask_values: tuple[int, ...] = (0, 2, 3, 4, 5, 6, 7),
     cloud_mask_policy: str = "strict",
 ) -> xr.Dataset:
     """
@@ -469,7 +476,9 @@ def prepare_viirs_scene_for_inversion(
     min_obs_500m
         Minimum 500 m observation support threshold.
     water_mask_values
-        Values in ``land_water_mask`` that should be excluded as water.
+        Values in ``land_water_mask`` that should be excluded as water or
+        mixed water for inversion masking. By default this includes all
+        VIIRS classes except land.
     cloud_mask_policy
         Cloud masking policy for ``valid_inversion_mask``. ``"strict"`` applies
         cloud and cloud-shadow masks. ``"snow_wins"`` ignores cloud and shadow
