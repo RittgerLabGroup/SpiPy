@@ -97,6 +97,41 @@ def test_water_year_workflow_and_array_plan_use_previous_summer_r0(tmp_path):
     assert all(Path(task.log_path).parent.name == "detailed_logs" for task in array_plan.tasks)
 
 
+def test_custom_output_root_namespaces_inversion_outputs(tmp_path):
+    output_root = tmp_path / "scratch" / "output" / "darkmask_rmse_grouped"
+    config = CurcWorkflowConfig(
+        scratch_root=tmp_path / "scratch",
+        input_source_root=tmp_path / "source",
+        output_root=output_root,
+        sensor="viirs",
+        platforms=("snpp",),
+        tiles=("h08v05",),
+        years=(2023,),
+        water_years=(2023,),
+    )
+    source_root = Path(config.input_source_root)
+    _touch_viirs_file(source_root, tile="h08v05", year=2022, doy=166)
+    _touch_viirs_file(source_root, tile="h08v05", year=2022, doy=274)
+
+    steps = plan_viirs_snpp_workflow_steps(
+        config,
+        tile="h08v05",
+        water_year=2023,
+    )
+    build_r0 = next(step for step in steps if step.step == "build_r0")
+    run_inversion = next(step for step in steps if step.step == "run_inversion")
+    array_plan = plan_viirs_snpp_inversion_array(
+        config,
+        tile="h08v05",
+        water_year=2023,
+    )
+
+    expected_output = output_root / "viirs" / "snpp" / "h08v05" / "raw" / "wy2023"
+    assert run_inversion.destination_path == str(expected_output)
+    assert all(task.output_path == str(expected_output) for task in array_plan.tasks)
+    assert build_r0.destination_path.endswith("/scratch/input/viirs/snpp/ancillary/r0/h08v05/2022")
+
+
 @pytest.mark.parametrize(
     ("platform", "product"),
     (

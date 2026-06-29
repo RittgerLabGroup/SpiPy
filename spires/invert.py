@@ -6,9 +6,34 @@ import scipy
 from spires.speedy_utol import group_spectra_block, scatter_group_results_block
 
 
+BASE_INVERSION_RESULT_VARIABLES = (
+    "fsca",
+    "fshade",
+    "dust_concentration",
+    "grain_size",
+)
+OPTIONAL_INVERSION_RESULT_VARIABLES = (
+    "grouped_reflectance_rmse",
+)
+INVERSION_RESULT_VARIABLES = BASE_INVERSION_RESULT_VARIABLES + OPTIONAL_INVERSION_RESULT_VARIABLES
+N_BASE_INVERSION_RESULTS = len(BASE_INVERSION_RESULT_VARIABLES)
+N_INVERSION_RESULTS = len(INVERSION_RESULT_VARIABLES)
+
+
+def _result_variable_names(include_grouped_reflectance_rmse=False):
+    if include_grouped_reflectance_rmse:
+        return INVERSION_RESULT_VARIABLES
+    return BASE_INVERSION_RESULT_VARIABLES
+
+
+def _n_result_variables(include_grouped_reflectance_rmse=False):
+    return len(_result_variable_names(include_grouped_reflectance_rmse))
+
+
 def speedy_invert(spectrum_target, spectrum_background, solar_angle, spectrum_shade=None,
                   bands=None, solar_angles=None, dust_concentrations=None, grain_sizes=None, reflectances=None,
-                  interpolator=None, lut_dataarray=None, max_eval=100, x0=np.array([0.5, 0.05, 10, 250]), algorithm=2):
+                  interpolator=None, lut_dataarray=None, max_eval=100, x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
+                  include_grouped_reflectance_rmse=False):
     """
     Inverts the snow reflectance spectrum using nonlinear optimization.
 
@@ -49,16 +74,22 @@ def speedy_invert(spectrum_target, spectrum_background, solar_angle, spectrum_sh
         1 = LN_COBYLA (Constrained Optimization BY Linear Approximations),
         2 = LN_NELDERMEAD (Nelder-Mead simplex),
         3 = LD_SLSQP (Sequential Least Squares Programming, not working in C++).
+    include_grouped_reflectance_rmse : bool, optional
+        If True, append grouped_reflectance_rmse as a fifth result. Default is
+        False for compatibility with the historical four-parameter return.
 
     Returns
     -------
     tuple
-        Optimization results as (fsca, fshade, dust_concentration, grain_size) where:
+        Optimization results as (fsca, fshade, dust_concentration, grain_size)
+        by default, or with grouped_reflectance_rmse appended when requested:
 
         - fsca : float - Fractional snow-covered area (0-1)
         - fshade : float - Fractional shaded area (0-1)
         - dust_concentration : float - Dust concentration in snow (ppm)
         - grain_size : float - Effective snow grain radius (μm)
+        - grouped_reflectance_rmse : float - RMSE between modeled reflectance
+          and the spectrum passed to the optimizer
 
     Examples
     --------
@@ -83,17 +114,20 @@ def speedy_invert(spectrum_target, spectrum_background, solar_angle, spectrum_sh
         grain_sizes = interpolator.grain_sizes
         reflectances = interpolator.reflectances
 
-    return spires.core.invert(spectrum_background=spectrum_background, spectrum_target=spectrum_target,
-                              spectrum_shade=spectrum_shade,
-                              solar_angle=solar_angle, bands=bands, solar_angles=solar_angles,
-                              dust_concentrations=dust_concentrations, grain_sizes=grain_sizes, lut=reflectances,
-                              max_eval=max_eval, x0=x0, algorithm=algorithm)
+    results = spires.core.invert(spectrum_background=spectrum_background, spectrum_target=spectrum_target,
+                                 spectrum_shade=spectrum_shade,
+                                 solar_angle=solar_angle, bands=bands, solar_angles=solar_angles,
+                                 dust_concentrations=dust_concentrations, grain_sizes=grain_sizes, lut=reflectances,
+                                 max_eval=max_eval, x0=x0, algorithm=algorithm,
+                                 include_grouped_reflectance_rmse=include_grouped_reflectance_rmse)
+    return results if include_grouped_reflectance_rmse else results[:N_BASE_INVERSION_RESULTS]
 
 
 def speedy_invert_array1d(spectra_targets, spectra_backgrounds, obs_solar_angles, spectrum_shade=None,
                           bands=None, solar_angles=None, dust_concentrations=None, grain_sizes=None, reflectances=None,
                           interpolator=None, lut_dataarray=None, max_eval=100,
-                          x0=np.array([0.5, 0.05, 10, 250]), algorithm=2):
+                          x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
+                          include_grouped_reflectance_rmse=False):
     """
     Batch inversion of snow reflectance spectra for 1D arrays of observations.
 
@@ -139,15 +173,19 @@ def speedy_invert_array1d(spectra_targets, spectra_backgrounds, obs_solar_angles
         1 = LN_COBYLA (Constrained Optimization BY Linear Approximations),
         2 = LN_NELDERMEAD (Nelder-Mead simplex),
         3 = LD_SLSQP (Sequential Least Squares Programming, not working in C++).
+    include_grouped_reflectance_rmse : bool, optional
+        If True, append grouped_reflectance_rmse as a fifth output column.
 
     Returns
     -------
     numpy.ndarray
-        2D array of shape (n_observations, 4) containing inversion results:
+        2D array of shape (n_observations, 4) by default, or
+        (n_observations, 5) when grouped_reflectance_rmse is requested:
         - results[:, 0] : Fractional snow-covered area (0-1)
         - results[:, 1] : Fractional shaded area (0-1)
         - results[:, 2] : Dust concentration in snow (ppm)
         - results[:, 3] : Effective snow grain radius (μm)
+        - results[:, 4] : Grouped reflectance RMSE
 
     Examples
     --------
@@ -175,7 +213,8 @@ def speedy_invert_array1d(spectra_targets, spectra_backgrounds, obs_solar_angles
         reflectances = interpolator.reflectances
 
     n = spectra_targets.shape[0]
-    results = np.empty((n, 4), dtype=np.double)
+    n_results = _n_result_variables(include_grouped_reflectance_rmse)
+    results = np.empty((n, n_results), dtype=np.double)
 
     spires.core.invert_array1d(spectra_targets=spectra_targets, spectra_backgrounds=spectra_backgrounds,
                                spectrum_shade=spectrum_shade,
@@ -189,7 +228,8 @@ def speedy_invert_array1d(spectra_targets, spectra_backgrounds, obs_solar_angles
 def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles, spectrum_shade=None, max_eval=100, x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
                           bands=None, solar_angles=None, dust_concentrations=None, grain_sizes=None, reflectances=None, interpolator=None,
                           valid_mask=None, use_grouping=False, grouping_method="chunk_bin_mean", grouping_tolerance=0.02,
-                          grouping_reflectance_tol=None, grouping_background_tol=None, grouping_solar_zenith_tol=None):
+                          grouping_reflectance_tol=None, grouping_background_tol=None, grouping_solar_zenith_tol=None,
+                          include_grouped_reflectance_rmse=False):
     """
     Batch inversion of snow reflectance spectra for 2D spatial arrays.
 
@@ -238,18 +278,21 @@ def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles
     Returns
     -------
     numpy.ndarray
-        3D array of shape (ny, nx, 4) containing inversion results:
+        3D array of shape (ny, nx, 4) by default, or (ny, nx, 5) when
+        grouped_reflectance_rmse is requested:
         - results[:, :, 0] : Fractional snow-covered area (0-1)
         - results[:, :, 1] : Fractional shaded area (0-1)
         - results[:, :, 2] : Dust concentration in snow (ppm)
         - results[:, :, 3] : Effective snow grain radius (μm)
+        - results[:, :, 4] : Grouped reflectance RMSE
 
     Notes
     -----
     The shade spectrum is automatically set to zeros for all pixels. Future versions
     may support spatially-varying shade spectra.
     """
-    
+    n_results = _n_result_variables(include_grouped_reflectance_rmse)
+
     if spectrum_shade is None:
         spectrum_shade = np.zeros(spectra_targets.shape[-1], dtype=np.double)
 
@@ -273,7 +316,11 @@ def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles
             solar_zenith_tol=grouping_solar_zenith_tol,
         )
         if grouped.n_groups == 0:
-            return np.full((spectra_targets.shape[0], spectra_targets.shape[1], 4), np.nan, dtype=np.double)
+            return np.full(
+                (spectra_targets.shape[0], spectra_targets.shape[1], n_results),
+                np.nan,
+                dtype=np.double,
+            )
 
         grouped_results = speedy_invert_array1d(
             spectra_targets=grouped.representative_targets,
@@ -288,10 +335,14 @@ def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles
             max_eval=max_eval,
             x0=x0,
             algorithm=algorithm,
+            include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
         )
         return scatter_group_results_block(grouped, grouped_results, fill_value=np.nan)
 
-    results = np.empty((spectra_targets.shape[0], spectra_targets.shape[1], 4), dtype=np.double)
+    results = np.empty(
+        (spectra_targets.shape[0], spectra_targets.shape[1], n_results),
+        dtype=np.double,
+    )
 
 
     spires.core.invert_array2d(spectra_backgrounds=spectra_backgrounds,
@@ -310,7 +361,8 @@ def speedy_invert_array2d(spectra_targets, spectra_backgrounds, obs_solar_angles
 
 def speedy_invert_xarray(spectra_targets, spectra_backgrounds, obs_solar_angles, lut_dataarray,
                           spectrum_shade=None, max_eval=100,
-                          x0=np.array([0.5, 0.05, 10, 250]), algorithm=2):
+                          x0=np.array([0.5, 0.05, 10, 250]), algorithm=2,
+                          include_grouped_reflectance_rmse=False):
     """
     Batch inversion of snow reflectance spectra using xarray DataArrays.
 
@@ -348,11 +400,13 @@ def speedy_invert_xarray(spectra_targets, spectra_backgrounds, obs_solar_angles,
     Returns
     -------
     numpy.ndarray
-        3D array of shape (ny, nx, 4) containing inversion results:
+        3D array of shape (ny, nx, 4) by default, or (ny, nx, 5) when
+        grouped_reflectance_rmse is requested:
         - results[:, :, 0] : Fractional snow-covered area (0-1)
         - results[:, :, 1] : Fractional shaded area (0-1)
         - results[:, :, 2] : Dust concentration in snow (ppm)
         - results[:, :, 3] : Effective snow grain radius (μm)
+        - results[:, :, 4] : Grouped reflectance RMSE
 
     Notes
     -----
@@ -373,7 +427,11 @@ def speedy_invert_xarray(spectra_targets, spectra_backgrounds, obs_solar_angles,
     grain_sizes = lut_dataarray.grain_size
     reflectances = lut_dataarray.transpose('band', 'solar_angle', 'dust_concentration', 'grain_size').values
 
-    results = np.empty((spectra_targets.y.size, spectra_targets.x.size, 4), dtype=np.double)
+    n_results = _n_result_variables(include_grouped_reflectance_rmse)
+    results = np.empty(
+        (spectra_targets.y.size, spectra_targets.x.size, n_results),
+        dtype=np.double,
+    )
 
     spires.core.invert_array2d(spectra_backgrounds=spectra_backgrounds,
                                spectra_targets=spectra_targets,
@@ -399,7 +457,8 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
                        client=None, scatter_lut=True, valid_mask=None,
                        use_grouping=False, grouping_method="chunk_bin_mean",
                        grouping_tolerance=0.02, grouping_reflectance_tol=None,
-                       grouping_background_tol=None, grouping_solar_zenith_tol=None):
+                       grouping_background_tol=None, grouping_solar_zenith_tol=None,
+                       include_grouped_reflectance_rmse=False):
     """
     Parallel inversion of snow reflectance spectra using Dask and xarray.
 
@@ -458,6 +517,8 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         - fshade : Fractional shaded area (0-1)
         - dust_concentration : Dust concentration in snow (ppm)
         - grain_size : Effective snow grain radius (μm)
+        - grouped_reflectance_rmse : Optional RMSE between modeled reflectance
+          and the spectrum passed to the optimizer
 
         Preserves all input coordinates and dimensions.
 
@@ -533,6 +594,8 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         spectrum_shade = np.zeros(len(interpolator.bands))
     if valid_mask is None:
         valid_mask = xarray.ones_like(obs_solar_angles, dtype=bool)
+    result_variable_names = _result_variable_names(include_grouped_reflectance_rmse)
+    n_results = len(result_variable_names)
 
     # Scatter LUT to workers if requested and client exists
     if scatter_lut and client is not None:
@@ -558,7 +621,7 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         if spectra_targets.ndim == 4:  # Has time dimension
             # Process each time step
             n_time = spectra_targets.shape[0]
-            results = np.empty((n_time,) + spectra_targets.shape[1:3] + (4,))
+            results = np.empty((n_time,) + spectra_targets.shape[1:3] + (n_results,))
             for t in range(n_time):
                 results[t] = speedy_invert_array2d(
                     spectra_targets=spectra_targets[t],
@@ -580,6 +643,7 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
                     grouping_reflectance_tol=grouping_reflectance_tol,
                     grouping_background_tol=grouping_background_tol,
                     grouping_solar_zenith_tol=grouping_solar_zenith_tol,
+                    include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
                 )
         else:  # No time dimension
             results = speedy_invert_array2d(
@@ -602,6 +666,7 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
                 grouping_reflectance_tol=grouping_reflectance_tol,
                 grouping_background_tol=grouping_background_tol,
                 grouping_solar_zenith_tol=grouping_solar_zenith_tol,
+                include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
             )
         return results
 
@@ -649,19 +714,14 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         output_dtypes=[np.float32],
         dask_gufunc_kwargs={
             'allow_rechunk': False,
-            'output_sizes': {'property': 4}
+            'output_sizes': {'property': n_results}
         },
         vectorize=False
     )
 
     # Convert to Dataset with named variables
     results = results.to_dataset(dim='property')
-    results = results.rename({
-        0: 'fsca',
-        1: 'fshade',
-        2: 'dust_concentration',
-        3: 'grain_size'
-    })
+    results = results.rename(dict(enumerate(result_variable_names)))
 
     # Add metadata
     results['fsca'].attrs = {
@@ -684,6 +744,16 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         'units': 'μm',
         'valid_range': [10, 2000]
     }
+    if 'grouped_reflectance_rmse' in results:
+        results['grouped_reflectance_rmse'].attrs = {
+            'long_name': 'Grouped Reflectance RMSE',
+            'units': '1',
+            'description': (
+                'RMSE between modeled reflectance and the spectrum passed to the optimizer. '
+                'When grouped inversion is enabled, this is computed for the representative '
+                'grouped spectrum and broadcast to member pixels.'
+            ),
+        }
 
     results.attrs.update({
         'grouping_enabled': bool(use_grouping),
@@ -692,6 +762,7 @@ def speedy_invert_dask(spectra_targets, spectra_backgrounds, obs_solar_angles,
         'grouping_reflectance_tol': grouping_reflectance_tol,
         'grouping_background_tol': grouping_background_tol,
         'grouping_solar_zenith_tol': grouping_solar_zenith_tol,
+        'include_grouped_reflectance_rmse': bool(include_grouped_reflectance_rmse),
     })
 
     return results

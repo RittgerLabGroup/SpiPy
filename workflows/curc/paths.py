@@ -29,7 +29,8 @@ def r0_dataset_path(config: CurcWorkflowConfig, platform: str, tile: str, year: 
 
 
 def output_tile_root(config: CurcWorkflowConfig, platform: str, tile: str) -> Path:
-    return config.scratch_root / "output" / config.sensor / platform / tile
+    output_root = config.scratch_root / "output" if config.output_root is None else config.output_root
+    return output_root / config.sensor / platform / tile
 
 
 def output_raw_water_year_root(config: CurcWorkflowConfig, platform: str, tile: str, water_year: int) -> Path:

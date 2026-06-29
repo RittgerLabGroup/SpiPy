@@ -176,9 +176,15 @@ def _build_component_masks(
     min_obs_1km: int,
     min_obs_500m: int,
     cloud_mask_policy: str,
+    mask_low_reflectance_for_inversion: bool,
+    low_reflectance_threshold: float,
 ) -> xr.Dataset:
     finite_reflectance = np.isfinite(reflectance)
     mask_invalid_reflectance = ~finite_reflectance.all(dim="band")
+    if mask_low_reflectance_for_inversion:
+        mask_low_reflectance = (reflectance < low_reflectance_threshold).all(dim="band")
+    else:
+        mask_low_reflectance = xr.zeros_like(mask_invalid_reflectance, dtype=bool)
 
     mask_bad_geometry = (
         (~np.isfinite(sensor_zenith))
@@ -223,6 +229,7 @@ def _build_component_masks(
 
     valid_inversion_mask = ~(
         mask_invalid_reflectance
+        | mask_low_reflectance
         | mask_bad_geometry
         | mask_water
         | mask_low_observation_support
@@ -243,6 +250,7 @@ def _build_component_masks(
     return xr.Dataset(
         data_vars={
             "mask_invalid_reflectance": mask_invalid_reflectance.astype(bool),
+            "mask_low_reflectance_for_inversion": mask_low_reflectance.astype(bool),
             "mask_bad_geometry": mask_bad_geometry.astype(bool),
             "mask_water": mask_water.astype(bool),
             "mask_low_observation_support": mask_low_observation_support.astype(bool),
@@ -380,6 +388,8 @@ def prepare_modis_scene_for_inversion(
     min_obs_500m: int = 1,
     water_mask_values: tuple[int, ...] = (0, 2, 3, 4, 5, 6, 7),
     cloud_mask_policy: str = "strict",
+    mask_low_reflectance_for_inversion: bool = False,
+    low_reflectance_threshold: float = 0.1,
 ) -> xr.Dataset:
     """Prepare a MODIS scene on a single 500 m analysis grid for inversion."""
     start_time = perf_counter()
@@ -462,9 +472,13 @@ def prepare_modis_scene_for_inversion(
         min_obs_1km=min_obs_1km,
         min_obs_500m=min_obs_500m,
         cloud_mask_policy=cloud_mask_policy,
+        mask_low_reflectance_for_inversion=mask_low_reflectance_for_inversion,
+        low_reflectance_threshold=low_reflectance_threshold,
     )
     prepared.update(mask_ds)
     prepared.attrs["cloud_mask_policy"] = cloud_mask_policy
+    prepared.attrs["mask_low_reflectance_for_inversion"] = bool(mask_low_reflectance_for_inversion)
+    prepared.attrs["low_reflectance_threshold"] = float(low_reflectance_threshold)
 
     prepared["reflectance"].attrs["selected_bands"] = selected_bands
     if lut_file is not None:
@@ -487,6 +501,8 @@ def prepare_modis_scene_for_inversion(
         lut_file=str(lut_file) if lut_file is not None else None,
         selected_bands=selected_bands,
         cloud_mask_policy=cloud_mask_policy,
+        mask_low_reflectance_for_inversion=mask_low_reflectance_for_inversion,
+        low_reflectance_threshold=low_reflectance_threshold,
         cloud_mask_source=str(cloud_mask_source) if isinstance(cloud_mask_source, (str, Path)) else type(cloud_mask_source).__name__ if cloud_mask_source is not None else None,
         keep_intermediate_reflectance=keep_intermediate_reflectance,
         output_shape=list(prepared["reflectance"].shape),

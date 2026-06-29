@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -83,6 +84,10 @@ def _normalize_external_mask_dataarray(
     target_x: xr.DataArray,
     target_y: xr.DataArray,
 ) -> xr.DataArray:
+    spatial_dims = {"y", "x", "y_500m", "x_500m"}
+    squeeze_dims = [dim for dim in data_array.dims if dim not in spatial_dims and data_array.sizes[dim] == 1]
+    if squeeze_dims:
+        data_array = data_array.squeeze(dim=squeeze_dims, drop=True)
     rename_map = {}
     if "y_500m" in data_array.dims:
         rename_map["y_500m"] = "y"
@@ -93,8 +98,36 @@ def _normalize_external_mask_dataarray(
     if normalized.dims != ("y", "x"):
         raise ValueError(f"External mask must have dims ('y', 'x') or ('y_500m', 'x_500m'); got {normalized.dims}")
 
-    normalized = normalized.assign_coords(y=target_y.values, x=target_x.values)
-    return normalized.astype(bool)
+    target_sizes = {"y": target_y.size, "x": target_x.size}
+    if normalized.sizes == target_sizes:
+        normalized = normalized.assign_coords(y=target_y.values, x=target_x.values)
+    elif "y" in normalized.coords and "x" in normalized.coords:
+        normalized = normalized.interp(
+            y=target_y.values,
+            x=target_x.values,
+            method="nearest",
+            kwargs={"fill_value": "extrapolate"},
+        )
+    else:
+        raise ValueError(
+            "External mask shape differs from the target grid and lacks y/x coordinates for nearest-neighbor "
+            f"resampling: mask sizes={dict(normalized.sizes)}, target sizes={target_sizes}"
+        )
+    return (normalized.notnull() & (normalized != 0)).astype(bool).load()
+
+
+def _open_mask_source(source: str | Path | xr.Dataset | xr.DataArray, *, mask_var: str) -> xr.Dataset:
+    if isinstance(source, xr.DataArray):
+        return xr.Dataset({mask_var: source})
+    if isinstance(source, xr.Dataset):
+        return source
+
+    path = Path(source)
+    try:
+        return xr.open_dataset(path)
+    except ValueError:
+        data_array = xr.open_dataarray(path)
+        return xr.Dataset({mask_var: data_array})
 
 
 def load_external_cloud_masks(
@@ -111,26 +144,19 @@ def load_external_cloud_masks(
     If a DataArray is provided, it is treated as the cloud mask and the cloud
     shadow mask defaults to all-False.
     """
-    close_dataset = None
-    if isinstance(source, xr.DataArray):
-        dataset = xr.Dataset({cloud_mask_var: source})
-    elif isinstance(source, xr.Dataset):
-        dataset = source
-    else:
-        source = Path(source)
-        try:
-            dataset = xr.open_dataset(source)
-            close_dataset = dataset
-        except ValueError:
-            data_array = xr.open_dataarray(source)
-            close_dataset = data_array
-            dataset = xr.Dataset({cloud_mask_var: data_array})
+    close_dataset = None if isinstance(source, (xr.DataArray, xr.Dataset)) else _open_mask_source(source, mask_var=cloud_mask_var)
+    dataset = source if isinstance(source, xr.Dataset) else xr.Dataset({cloud_mask_var: source}) if isinstance(source, xr.DataArray) else close_dataset
 
     try:
         if cloud_mask_var not in dataset:
-            raise ValueError(f"External cloud mask source does not contain variable {cloud_mask_var!r}")
+            data_vars = list(dataset.data_vars)
+            if len(data_vars) != 1:
+                raise ValueError(f"External cloud mask source does not contain variable {cloud_mask_var!r}")
+            cloud_data = dataset[data_vars[0]]
+        else:
+            cloud_data = dataset[cloud_mask_var]
 
-        mask_cloud = _normalize_external_mask_dataarray(dataset[cloud_mask_var], target_x=target_x, target_y=target_y)
+        mask_cloud = _normalize_external_mask_dataarray(cloud_data, target_x=target_x, target_y=target_y)
         if cloud_shadow_mask_var in dataset:
             mask_cloud_shadow = _normalize_external_mask_dataarray(
                 dataset[cloud_shadow_mask_var],
@@ -149,3 +175,51 @@ def load_external_cloud_masks(
     finally:
         if close_dataset is not None:
             close_dataset.close()
+
+
+def load_external_inversion_masks(
+    sources: Mapping[str, str | Path | xr.Dataset | xr.DataArray] | None,
+    *,
+    target_x: xr.DataArray,
+    target_y: xr.DataArray,
+) -> xr.Dataset:
+    """Load named external invalid-pixel masks on the prepared 500 m grid."""
+    if not sources:
+        return xr.Dataset()
+
+    data_vars: dict[str, xr.DataArray] = {}
+    close_datasets = []
+    try:
+        for raw_name, source in sources.items():
+            name = str(raw_name)
+            mask_var = f"mask_{name}"
+            if isinstance(source, xr.Dataset):
+                dataset = source
+            elif isinstance(source, xr.DataArray):
+                dataset = xr.Dataset({mask_var: source})
+            else:
+                dataset = _open_mask_source(source, mask_var=mask_var)
+                close_datasets.append(dataset)
+
+            if mask_var in dataset:
+                data_array = dataset[mask_var]
+            elif name in dataset:
+                data_array = dataset[name]
+            else:
+                variables = list(dataset.data_vars)
+                if len(variables) != 1:
+                    raise ValueError(
+                        f"External inversion mask {name!r} must contain {mask_var!r}, "
+                        f"{name!r}, or exactly one data variable"
+                    )
+                data_array = dataset[variables[0]]
+
+            data_vars[mask_var] = _normalize_external_mask_dataarray(
+                data_array,
+                target_x=target_x,
+                target_y=target_y,
+            )
+        return xr.Dataset(data_vars=data_vars)
+    finally:
+        for dataset in close_datasets:
+            dataset.close()

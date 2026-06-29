@@ -73,7 +73,8 @@ std::vector<double>  invert(double* spectrum_background, int len_background,
                            double* lut, int n_bands, int n_solar_angles, int n_dust_concentrations, int n_grain_sizes,                           
                            int max_eval,
                            std::vector<double> x0,
-                           int algorithm);
+                           int algorithm,
+                           bool include_grouped_reflectance_rmse=false);
 
 
 

@@ -280,6 +280,66 @@ def test_prepare_viirs_scene_for_inversion_can_ignore_cloud_mask_for_inversion()
     assert relaxed.attrs["cloud_mask_policy"] == "ignore_cloud"
 
 
+def test_prepare_viirs_scene_for_inversion_can_mask_all_low_reflectance_pixels():
+    raw = build_mock_viirs_raw_dataset()
+    raw["reflectance_1km"] = xr.zeros_like(raw["reflectance_1km"]) + 0.05
+    reflectance_500m = raw["reflectance_500m"].copy()
+    reflectance_500m.loc[dict(y_500m=0, x_500m=0)] = 0.05
+    reflectance_500m.loc[dict(y_500m=0, x_500m=1)] = 0.10
+    raw["reflectance_500m"] = reflectance_500m
+
+    default = prepare_viirs_scene_for_inversion(raw)
+    masked = prepare_viirs_scene_for_inversion(raw, mask_low_reflectance_for_inversion=True)
+
+    assert not bool(default["mask_low_reflectance_for_inversion"].any())
+    assert bool(masked["mask_low_reflectance_for_inversion"].isel(y=0, x=0))
+    assert not bool(masked["valid_inversion_mask"].isel(y=0, x=0))
+    assert not bool(masked["mask_low_reflectance_for_inversion"].isel(y=0, x=1))
+    assert bool(masked["valid_inversion_mask"].isel(y=0, x=1))
+    assert bool(masked["valid_r0_mask"].isel(y=0, x=0))
+    assert masked.attrs["mask_low_reflectance_for_inversion"] is True
+    assert masked.attrs["low_reflectance_threshold"] == 0.1
+
+
+def test_prepare_viirs_scene_for_inversion_resamples_coarse_cloud_mask_nearest():
+    raw = build_mock_viirs_raw_dataset()
+    cloud_mask = xr.DataArray(
+        np.ones((1, 1), dtype=np.uint8),
+        dims=("y", "x"),
+        coords={
+            "y": [float(raw["y_500m"].mean())],
+            "x": [float(raw["x_500m"].mean())],
+        },
+    )
+
+    ds = prepare_viirs_scene_for_inversion(raw, cloud_mask_source=cloud_mask)
+
+    assert ds["mask_cloud"].shape == (2, 2)
+    assert bool(ds["mask_cloud"].all())
+    assert not bool(ds["valid_inversion_mask"].any())
+
+
+def test_prepare_viirs_scene_for_inversion_applies_external_invalid_masks():
+    raw = build_mock_viirs_raw_dataset()
+    stc_mask = xr.DataArray(
+        np.array([[0, 1], [0, 0]], dtype=np.uint8),
+        dims=("y", "x"),
+        coords={"y": raw["y_500m"].values, "x": raw["x_500m"].values},
+    )
+
+    ds = prepare_viirs_scene_for_inversion(
+        raw,
+        external_inversion_mask_sources={"stc_false_positive": stc_mask},
+    )
+
+    assert "mask_stc_false_positive" in ds
+    assert "mask_external_inversion" in ds
+    assert bool(ds["mask_stc_false_positive"].isel(y=0, x=1))
+    assert not bool(ds["valid_inversion_mask"].isel(y=0, x=1))
+    assert bool(ds["valid_inversion_mask"].isel(y=0, x=0))
+    assert ds.attrs["external_inversion_mask_names"] == "mask_stc_false_positive"
+
+
 def test_prepare_viirs_scene_for_inversion_keeps_water_valid_for_r0():
     raw = build_mock_viirs_raw_dataset()
     raw["land_water_mask"] = xr.zeros_like(raw["land_water_mask"])

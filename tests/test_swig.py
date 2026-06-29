@@ -75,6 +75,28 @@ def test_invert():
     np.testing.assert_allclose(x, expected, rtol=1e-5)
 
 
+def test_invert_can_return_grouped_reflectance_rmse():
+    x = spires.core.invert(spectrum_background=spectrum_background,
+                           spectrum_target=spectrum_target,
+                           spectrum_shade=spectrum_shade,
+                           solar_angle=solar_angle,
+                           bands=interpolator.bands,
+                           solar_angles=interpolator.solar_angles,
+                           dust_concentrations=interpolator.dust_concentrations,
+                           grain_sizes=interpolator.grain_sizes,
+                           lut=interpolator.reflectances,
+                           max_eval=100,
+                           x0=x0,
+                           algorithm=1,
+                           include_grouped_reflectance_rmse=True)
+
+    expected = np.array([4.089303e-01, 1.552017e-01, 1.387936e+02, 3.645840e+02])
+    np.testing.assert_allclose(x[:4], expected, rtol=1e-5)
+    assert len(x) == 5
+    assert np.isfinite(x[4])
+    assert x[4] >= 0
+
+
 def test_invert_array():
     n = 3
     results = np.empty((n, 4), dtype=np.double)
@@ -100,3 +122,32 @@ def test_invert_array():
                          [4.089303e-01, 1.552017e-01, 1.387936e+02, 3.645840e+02],
                          [4.089303e-01, 1.552017e-01, 1.387936e+02, 3.645840e+02]])
     np.testing.assert_allclose(results, expected, rtol=1e-5)
+
+
+def test_invert_array_can_return_grouped_reflectance_rmse():
+    n = 3
+    results = np.empty((n, 5), dtype=np.double)
+    spectra_backgrounds = np.tile(spectrum_background, (n, 1))
+    spectra_targets = np.tile(spectrum_target, (n, 1))
+    obs_solar_angles = np.repeat(solar_angle, n)
+
+    spires.core.invert_array1d(spectra_backgrounds=spectra_backgrounds,
+                               spectra_targets=spectra_targets,
+                               spectrum_shade=spectrum_shade,
+                               obs_solar_angles=obs_solar_angles,
+                               bands=interpolator.bands,
+                               solar_angles=interpolator.solar_angles,
+                               dust_concentrations=interpolator.dust_concentrations,
+                               grain_sizes=interpolator.grain_sizes,
+                               lut=interpolator.reflectances,
+                               results=results,
+                               max_eval=100,
+                               x0=x0,
+                               algorithm=1)
+
+    expected = np.array([[4.089303e-01, 1.552017e-01, 1.387936e+02, 3.645840e+02],
+                         [4.089303e-01, 1.552017e-01, 1.387936e+02, 3.645840e+02],
+                         [4.089303e-01, 1.552017e-01, 1.387936e+02, 3.645840e+02]])
+    np.testing.assert_allclose(results[:, :4], expected, rtol=1e-5)
+    assert np.isfinite(results[:, 4]).all()
+    assert (results[:, 4] >= 0).all()

@@ -102,6 +102,7 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         captured["target_chunks"] = spectra_targets.chunks
         captured["background_chunks"] = spectra_backgrounds.chunks
@@ -134,6 +135,7 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         lut_file=TEST_LUT_FILE,
         execution_profile="local",
         algorithm=5,
+        apply_valid_inversion_mask=True,
         use_grouping=True,
         grouping_method="first",
         grouping_tolerance=0.02,
@@ -185,6 +187,7 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         captured["valid_mask"] = valid_mask
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
@@ -252,6 +255,7 @@ def test_run_viirs_inversion_applies_canopy_and_ice_snow_fraction_adjustment(mon
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}
@@ -336,6 +340,7 @@ def test_run_viirs_inversion_returns_netcdf_serializable_attrs(monkeypatch, tmp_
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}
@@ -354,7 +359,7 @@ def test_run_viirs_inversion_returns_netcdf_serializable_attrs(monkeypatch, tmp_
 
     result = run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local")
 
-    assert json.loads(result.attrs["units_by_band"])["I1"] == "percent reflectance"
+    assert "units_by_band" not in result.attrs
     assert json.loads(result["x"].attrs["two_dimensional_attr"]) == [[1, 2], [3, 4]]
     assert result["valid_inversion_mask"].attrs["flag_values"] == [0, 1]
     assert "valid_range" not in result["valid_inversion_mask"].attrs
@@ -407,6 +412,7 @@ def test_run_viirs_inversion_accepts_noaa21_lut_platform(monkeypatch, tmp_path):
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}
@@ -450,6 +456,7 @@ def test_run_viirs_inversion_preserves_reflectance_in_output(monkeypatch, tmp_pa
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}

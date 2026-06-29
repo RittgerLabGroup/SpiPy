@@ -100,6 +100,7 @@ def test_run_modis_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         captured["target_chunks"] = spectra_targets.chunks
         captured["background_chunks"] = spectra_backgrounds.chunks
@@ -120,10 +121,17 @@ def test_run_modis_inversion_calls_core_inverter_and_masks_results(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("spires.sensors.modis.workflow.LutInterpolator", DummyInterpolator)
-    monkeypatch.setattr("spires.sensors.modis.workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
-    result = run_modis_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local", algorithm=5)
+    result = run_modis_inversion(
+        scene,
+        r0,
+        lut_file=TEST_LUT_FILE,
+        execution_profile="local",
+        algorithm=5,
+        apply_valid_inversion_mask=True,
+    )
 
     assert captured["target_chunks"] is not None
     assert captured["background_chunks"] is not None
@@ -132,7 +140,7 @@ def test_run_modis_inversion_calls_core_inverter_and_masks_results(monkeypatch):
     assert captured["scatter_lut"] is False
     assert captured["algorithm"] == 5
     np.testing.assert_allclose(captured["x0"], np.array([0.5, 0.05, 10, 250], dtype=np.float64))
-    assert np.isnan(result["fsca"].isel(y=0, x=1))
+    assert np.isnan(result["raw_viewable_snow_fraction"].isel(y=0, x=1))
     assert result.attrs["lut_file"].endswith(".mat")
     assert result.attrs["execution_profile"] == "local"
     assert list(result.attrs["selected_bands"]) == ["1", "2", "3", "4", "5", "6", "7"]
@@ -166,6 +174,7 @@ def test_run_modis_inversion_can_keep_outputs_unmasked(monkeypatch):
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         captured["valid_mask"] = valid_mask
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
@@ -180,8 +189,8 @@ def test_run_modis_inversion_can_keep_outputs_unmasked(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("spires.sensors.modis.workflow.LutInterpolator", DummyInterpolator)
-    monkeypatch.setattr("spires.sensors.modis.workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
     result = run_modis_inversion(
         scene,
@@ -192,7 +201,7 @@ def test_run_modis_inversion_can_keep_outputs_unmasked(monkeypatch):
     )
 
     assert captured["valid_mask"] is None
-    assert result["fsca"].isel(y=0, x=1).item() == pytest.approx(0.75)
+    assert result["raw_viewable_snow_fraction"].isel(y=0, x=1).item() == pytest.approx(0.75)
     assert result["raw_viewable_snow_fraction"].isel(y=0, x=1).item() == pytest.approx(0.75)
     assert not bool(result["valid_inversion_mask"].isel(y=0, x=1))
     assert result.attrs["valid_inversion_mask_applied"] == 0
@@ -203,7 +212,7 @@ def test_run_modis_inversion_rejects_scene_r0_band_mismatch(monkeypatch):
     scene = build_mock_prepared_scene()
     r0 = build_mock_r0().assign_coords(band=["1", "2", "3", "4", "5", "7", "6"])
 
-    monkeypatch.setattr("spires.sensors.modis.workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
 
     with pytest.raises(ValueError, match="Scene and R0 band order do not match"):
         run_modis_inversion(scene, r0, lut_file=TEST_LUT_FILE)
@@ -231,6 +240,7 @@ def test_run_modis_inversion_preserves_reflectance_in_output(monkeypatch, tmp_pa
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
         coords = {dim: spectra_targets.coords[dim] for dim in dims}

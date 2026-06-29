@@ -455,13 +455,15 @@ std::vector<double> invert(double* spectrum_background, int len_background,
                            double* lut, int n_bands, int n_solar_angles, int n_dust_concentrations, int n_grain_sizes,
                            int max_eval,
                            std::vector<double> x0,
-                           int algorithm) {
+                           int algorithm,
+                           bool include_grouped_reflectance_rmse) {
 
     //std::cout << "Starting" << std::endl;      
     
     // TODO: do not invert if there is a NaN in the target
     if (spectrum_has_nan(spectrum_target, len_target)) {
-        std::vector<double> x(4, std::nan(""));
+        int n_results = include_grouped_reflectance_rmse ? 5 : 4;
+        std::vector<double> x(n_results, std::nan(""));
         return x;
     }
     
@@ -578,6 +580,13 @@ std::vector<double> invert(double* spectrum_background, int len_background,
     //std::vector<double> x = {0.5, 0.05, 10, 250};
     std::vector<double> x = x0;
     nlopt::result result = opt.optimize(x, minf);
+    if (include_grouped_reflectance_rmse) {
+        double grouped_reflectance_rmse = std::nan("");
+        if (len_target > 0) {
+            grouped_reflectance_rmse = minf / std::sqrt(static_cast<double>(len_target));
+        }
+        x.push_back(grouped_reflectance_rmse);
+    }
 
     return x;
 }
@@ -695,10 +704,14 @@ void invert_array1d(double* spectra_backgrounds, int n_obs_backgrounds, int n_ba
                                        lut, n_bands, n_solar_angles, n_dust_concentrations, n_grain_sizes,
                                        max_eval,
                                        x0,
-                                       algorithm
+                                       algorithm,
+                                       n_results > 4
                                        );
 
-        for (size_t i = 0; i < x.size(); ++i) {
+        for (size_t i = 0; i < static_cast<size_t>(n_results); ++i) {
+            results[obs * n_results + i] = std::nan("");
+        }
+        for (size_t i = 0; i < x.size() && i < static_cast<size_t>(n_results); ++i) {
             results[obs * n_results + i] = x[i];
         }
     }
@@ -746,10 +759,14 @@ void invert_array2d(double* spectra_backgrounds, int n_background_y, int n_backg
                                                 lut, n_bands, n_solar_angles, n_dust_concentrations, n_grain_sizes,
                                                 max_eval,
                                                 x0,
-                                                algorithm
+                                                algorithm,
+                                                n_results > 4
                                            );
 
-            for (size_t i = 0; i < result.size(); ++i) {
+            for (size_t i = 0; i < static_cast<size_t>(n_results); ++i) {
+                results[obs * n_results + i] = std::nan("");
+            }
+            for (size_t i = 0; i < result.size() && i < static_cast<size_t>(n_results); ++i) {
                 //results[obs * i] = result[i];
                 results[obs * n_results + i] = result[i];;
             }

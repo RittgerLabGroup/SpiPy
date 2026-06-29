@@ -32,6 +32,9 @@ class InversionRuntimeContext:
     r0_path: str
     canopy_fraction_path: str | None
     ice_fraction_path: str | None
+    cloud_mask_path: str | None
+    water_mask_path: str | None
+    playa_mask_path: str | None
     lut_file: str
     output_path: str
     output_dataset_path: str
@@ -66,6 +69,50 @@ def _infer_static_fraction_path(ancillary_root: Path, stem: str) -> Path | None:
             ancillary_root / f"{stem}.tif",
             ancillary_root / f"{stem}.tiff",
             ancillary_root / f"{stem}.nc",
+        ]
+    )
+
+
+def _infer_tile_ancillary_path(ancillary_root: Path, tile: str, stems: tuple[str, ...]) -> Path | None:
+    candidates: list[Path] = []
+    for stem in stems:
+        candidates.extend(
+            [
+                ancillary_root / f"{stem}.zarr",
+                ancillary_root / f"{stem}.tif",
+                ancillary_root / f"{stem}.tiff",
+                ancillary_root / f"{stem}.nc",
+                ancillary_root / f"{tile}_{stem}.zarr",
+                ancillary_root / f"{tile}_{stem}.tif",
+                ancillary_root / f"{tile}_{stem}.tiff",
+                ancillary_root / f"{tile}_{stem}.nc",
+            ]
+        )
+    return _first_existing_path(candidates)
+
+
+def _cloud_mask_path(scratch_root: Path, task: InversionTaskPlan) -> Path | None:
+    date_token = task.date.replace("-", "")
+    return _first_existing_path(
+        [
+            scratch_root
+            / "input"
+            / task.sensor
+            / task.platform
+            / "ancillary"
+            / "cloud"
+            / task.tile
+            / str(task.water_year)
+            / f"{task.platform}_{task.tile}_{date_token}_cloud_mask.tif",
+            scratch_root
+            / "input"
+            / task.sensor
+            / task.platform
+            / "ancillary"
+            / task.tile
+            / "cloud"
+            / str(task.water_year)
+            / f"{task.platform}_{task.tile}_{date_token}_cloud_mask.tif",
         ]
     )
 
@@ -176,7 +223,17 @@ def build_viirs_snpp_inversion_runtime_context(
     resolved_lut_file = default_viirs_lut_file(task.platform) if lut_file is None else Path(lut_file).expanduser().resolve()
     r0_path = _runtime_r0_dataset_path(scratch_root, task)
     canopy_fraction_path = _infer_static_fraction_path(ancillary_root, "canopy_fraction")
-    ice_fraction_path = _infer_static_fraction_path(ancillary_root, "glacier_ice_fraction")
+    ice_fraction_path = (
+        _infer_static_fraction_path(ancillary_root, "glacier_ice_fraction")
+        or _infer_tile_ancillary_path(ancillary_root, task.tile, ("ice_rgi60_202309", "ice"))
+    )
+    cloud_mask_path = _cloud_mask_path(scratch_root, task)
+    water_mask_path = _infer_tile_ancillary_path(ancillary_root, task.tile, ("water_mod44_50", "water_mask", "water"))
+    playa_mask_path = _infer_tile_ancillary_path(
+        ancillary_root,
+        task.tile,
+        ("stc_false_positive_manual_20230920_mod44_50", "stc_false_positive", "playa"),
+    )
 
     return InversionRuntimeContext(
         task=task,
@@ -188,6 +245,9 @@ def build_viirs_snpp_inversion_runtime_context(
         r0_path=str(r0_path),
         canopy_fraction_path=str(canopy_fraction_path) if canopy_fraction_path is not None else None,
         ice_fraction_path=str(ice_fraction_path) if ice_fraction_path is not None else None,
+        cloud_mask_path=str(cloud_mask_path) if cloud_mask_path is not None else None,
+        water_mask_path=str(water_mask_path) if water_mask_path is not None else None,
+        playa_mask_path=str(playa_mask_path) if playa_mask_path is not None else None,
         lut_file=str(resolved_lut_file),
         output_path=task.output_path,
         output_dataset_path=str(_inversion_output_dataset_path(task)),
@@ -201,6 +261,10 @@ def summarize_viirs_snpp_runtime_requirements(context: InversionRuntimeContext) 
         "staged_reflectance_paths": [],
         "r0_path": [],
         "lut_file": [],
+        "cloud_mask_path": [],
+        "water_mask_path": [],
+        "ice_fraction_path": [],
+        "playa_mask_path": [],
     }
     if len(context.staged_reflectance_paths) != 1:
         raise ValueError(
@@ -214,6 +278,28 @@ def summarize_viirs_snpp_runtime_requirements(context: InversionRuntimeContext) 
         missing["r0_path"].append(context.r0_path)
     if not Path(context.lut_file).exists():
         missing["lut_file"].append(context.lut_file)
+    if context.cloud_mask_path is None or not Path(context.cloud_mask_path).exists():
+        missing["cloud_mask_path"].append(
+            str(
+                Path(context.scratch_root)
+                / "input"
+                / context.task.sensor
+                / context.task.platform
+                / "ancillary"
+                / "cloud"
+                / context.task.tile
+                / str(context.task.water_year)
+                / f"{context.task.platform}_{context.task.tile}_{context.task.date.replace('-', '')}_cloud_mask.tif"
+            )
+        )
+    if context.water_mask_path is None or not Path(context.water_mask_path).exists():
+        missing["water_mask_path"].append(str(Path(context.ancillary_root) / f"{context.task.tile}_water_mod44_50.tif"))
+    if context.ice_fraction_path is None or not Path(context.ice_fraction_path).exists():
+        missing["ice_fraction_path"].append(str(Path(context.ancillary_root) / f"{context.task.tile}_ice_rgi60_202309.tif"))
+    if context.playa_mask_path is None or not Path(context.playa_mask_path).exists():
+        missing["playa_mask_path"].append(
+            str(Path(context.ancillary_root) / f"{context.task.tile}_stc_false_positive_manual_20230920_mod44_50.tif")
+        )
     return missing
 
 
@@ -247,6 +333,12 @@ def _failure_fields_from_missing_inputs(missing: dict[str, list[str]]) -> dict[s
             "failure_code": "missing_lut",
             "retry_recommended": False,
         }
+    for key in ("cloud_mask_path", "water_mask_path", "ice_fraction_path", "playa_mask_path"):
+        if missing.get(key):
+            return {
+                "failure_code": f"missing_{key}",
+                "retry_recommended": False,
+            }
     return {
         "failure_code": "ready",
         "retry_recommended": False,
@@ -283,6 +375,9 @@ def execute_viirs_snpp_inversion_task(
     overwrite: bool = False,
     dry_run: bool = True,
     apply_valid_inversion_mask: bool | None = None,
+    mask_low_reflectance_for_inversion: bool | None = None,
+    low_reflectance_threshold: float | None = None,
+    include_grouped_reflectance_rmse: bool | None = None,
     use_grouping: bool | None = None,
     grouping_method: str | None = None,
 ) -> dict[str, Any]:
@@ -405,6 +500,9 @@ def execute_viirs_snpp_inversion_task(
     validate_viirs_snpp_runtime_context(context)
     manifest_payload = load_inversion_array_manifest(context.manifest_path)
     manifest_apply_valid_mask = bool(manifest_payload.get("apply_valid_inversion_mask", False))
+    manifest_mask_low_reflectance = bool(manifest_payload.get("mask_low_reflectance_for_inversion", False))
+    manifest_low_reflectance_threshold = float(manifest_payload.get("low_reflectance_threshold", 0.1))
+    manifest_include_grouped_reflectance_rmse = bool(manifest_payload.get("include_grouped_reflectance_rmse", False))
     manifest_use_grouping = bool(manifest_payload.get("use_grouping", True))
     manifest_grouping_method = str(manifest_payload.get("grouping_method", "chunk_bin_mean"))
 
@@ -414,6 +512,21 @@ def execute_viirs_snpp_inversion_task(
             "execution_profile": execution_profile,
             "logger": logger,
             "apply_valid_inversion_mask": manifest_apply_valid_mask if apply_valid_inversion_mask is None else apply_valid_inversion_mask,
+            "mask_low_reflectance_for_inversion": (
+                manifest_mask_low_reflectance
+                if mask_low_reflectance_for_inversion is None
+                else mask_low_reflectance_for_inversion
+            ),
+            "low_reflectance_threshold": (
+                manifest_low_reflectance_threshold
+                if low_reflectance_threshold is None
+                else low_reflectance_threshold
+            ),
+            "include_grouped_reflectance_rmse": (
+                manifest_include_grouped_reflectance_rmse
+                if include_grouped_reflectance_rmse is None
+                else include_grouped_reflectance_rmse
+            ),
             "use_grouping": manifest_use_grouping if use_grouping is None else use_grouping,
             "grouping_method": manifest_grouping_method if grouping_method is None else grouping_method,
         }
@@ -421,6 +534,17 @@ def execute_viirs_snpp_inversion_task(
             run_kwargs["canopy_fraction"] = context.canopy_fraction_path
         if context.ice_fraction_path is not None:
             run_kwargs["ice_fraction"] = context.ice_fraction_path
+        external_inversion_mask_sources = {}
+        if context.water_mask_path is not None:
+            external_inversion_mask_sources["water_external"] = context.water_mask_path
+        if context.ice_fraction_path is not None:
+            external_inversion_mask_sources["ice_external"] = context.ice_fraction_path
+        if context.playa_mask_path is not None:
+            external_inversion_mask_sources["stc_false_positive"] = context.playa_mask_path
+        if external_inversion_mask_sources:
+            run_kwargs["external_inversion_mask_sources"] = external_inversion_mask_sources
+        if context.cloud_mask_path is not None:
+            run_kwargs["cloud_mask_source"] = context.cloud_mask_path
 
         results = run_viirs_inversion(
             context.staged_reflectance_paths[0],

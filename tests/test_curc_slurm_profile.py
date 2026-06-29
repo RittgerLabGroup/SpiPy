@@ -22,6 +22,9 @@ def test_manifest_round_trip_preserves_slurm_profile(tmp_path: Path) -> None:
         max_concurrent_tasks=1,
         max_auto_retry_count=3,
         apply_valid_inversion_mask=False,
+        mask_low_reflectance_for_inversion=True,
+        low_reflectance_threshold=0.12,
+        include_grouped_reflectance_rmse=True,
         use_grouping=True,
         grouping_method="chunk_bin_mean",
         tasks=(
@@ -65,6 +68,9 @@ def test_manifest_round_trip_preserves_slurm_profile(tmp_path: Path) -> None:
         "extra_args": ["--mail-type=FAIL"],
     }
     assert payload["apply_valid_inversion_mask"] is False
+    assert payload["mask_low_reflectance_for_inversion"] is True
+    assert payload["low_reflectance_threshold"] == 0.12
+    assert payload["include_grouped_reflectance_rmse"] is True
     assert payload["use_grouping"] is True
     assert payload["grouping_method"] == "chunk_bin_mean"
 
@@ -110,6 +116,9 @@ def test_render_sbatch_command_uses_profile_and_cli_overrides(tmp_path: Path) ->
     assert "--qos=debug" in command
     assert command[-2] == "--wrap"
     assert "run_curc_inversion_array_task.py" in command[-1]
+    assert "--mask-low-reflectance-for-inversion false" in command[-1]
+    assert "--low-reflectance-threshold 0.1" in command[-1]
+    assert "--include-grouped-reflectance-rmse false" in command[-1]
 
 
 def test_curc_workflow_config_canonicalized_preserves_slurm_profile() -> None:
@@ -127,3 +136,6 @@ def test_curc_workflow_config_canonicalized_preserves_slurm_profile() -> None:
     canonical = config.canonicalized()
 
     assert canonical.slurm_profile == config.slurm_profile
+    assert canonical.mask_low_reflectance_for_inversion is False
+    assert canonical.low_reflectance_threshold == 0.1
+    assert canonical.include_grouped_reflectance_rmse is False

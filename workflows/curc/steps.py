@@ -65,6 +65,9 @@ class SlurmArrayPlan:
     max_concurrent_tasks: int | None
     max_auto_retry_count: int
     apply_valid_inversion_mask: bool
+    mask_low_reflectance_for_inversion: bool
+    low_reflectance_threshold: float
+    include_grouped_reflectance_rmse: bool
     use_grouping: bool
     grouping_method: str
     tasks: tuple[InversionTaskPlan, ...]

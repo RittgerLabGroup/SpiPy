@@ -419,6 +419,7 @@ def run_sensor_inversion(
     grouping_reflectance_tol: float | np.ndarray | None = None,
     grouping_background_tol: float | np.ndarray | None = None,
     grouping_solar_zenith_tol: float | np.ndarray | None = None,
+    include_grouped_reflectance_rmse: bool = False,
     canopy_fraction=AUTO_CANOPY_FRACTION,
     ice_fraction=None,
     canopy_vertical_to_horizontal_crown_radius: float = 2.7,
@@ -496,6 +497,7 @@ def run_sensor_inversion(
         grouping_reflectance_tol=grouping_reflectance_tol if use_grouping else None,
         grouping_background_tol=grouping_background_tol if use_grouping else None,
         grouping_solar_zenith_tol=grouping_solar_zenith_tol if use_grouping else None,
+        include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
     )
 
     results = speedy_invert_dask(
@@ -515,6 +517,7 @@ def run_sensor_inversion(
         grouping_reflectance_tol=grouping_reflectance_tol,
         grouping_background_tol=grouping_background_tol,
         grouping_solar_zenith_tol=grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
     )
 
     if apply_valid_mask:
@@ -557,6 +560,7 @@ def run_sensor_inversion(
     results.attrs["grouping_reflectance_tol"] = grouping_reflectance_tol if use_grouping else None
     results.attrs["grouping_background_tol"] = grouping_background_tol if use_grouping else None
     results.attrs["grouping_solar_zenith_tol"] = grouping_solar_zenith_tol if use_grouping else None
+    results.attrs["include_grouped_reflectance_rmse"] = bool(include_grouped_reflectance_rmse)
     if profile is not None:
         results.attrs["execution_profile"] = profile.name
     results = copy_spatial_metadata_fn(scene_ds, results)
@@ -591,6 +595,7 @@ def run_sensor_inversion(
         grouping_reflectance_tol=grouping_reflectance_tol if use_grouping else None,
         grouping_background_tol=grouping_background_tol if use_grouping else None,
         grouping_solar_zenith_tol=grouping_solar_zenith_tol if use_grouping else None,
+        include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
     )
 
     return results

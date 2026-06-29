@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timedelta
 import logging
@@ -26,7 +27,7 @@ from spires.sensors.viirs.bands import (
     resolve_viirs_inversion_bands_with_source,
 )
 from spires.sensors.viirs.geospatial import attach_spatial_ref, copy_spatial_metadata, parse_viirs_grid_metadata
-from spires.sensors.viirs.qa import decode_viirs_qa_masks, load_external_cloud_masks
+from spires.sensors.viirs.qa import decode_viirs_qa_masks, load_external_cloud_masks, load_external_inversion_masks
 
 
 VIIRS_FILENAME_RE = re.compile(
@@ -344,10 +345,17 @@ def _build_component_masks(
     min_obs_1km: int,
     min_obs_500m: int,
     cloud_mask_policy: str,
+    mask_low_reflectance_for_inversion: bool,
+    low_reflectance_threshold: float,
+    external_inversion_masks: xr.Dataset | None = None,
 ) -> xr.Dataset:
     """Build transparent component masks and final valid masks on the 500 m grid."""
     finite_reflectance = np.isfinite(reflectance)
     mask_invalid_reflectance = ~finite_reflectance.all(dim="band")
+    if mask_low_reflectance_for_inversion:
+        mask_low_reflectance = (reflectance < low_reflectance_threshold).all(dim="band")
+    else:
+        mask_low_reflectance = xr.zeros_like(mask_invalid_reflectance, dtype=bool)
 
     mask_bad_geometry = (
         (~np.isfinite(sensor_zenith))
@@ -388,13 +396,23 @@ def _build_component_masks(
             "'strict', 'snow_wins', 'ignore_cloud', or 'ignore_cloud_and_shadow'"
         )
 
+    external_mask_vars: dict[str, xr.DataArray] = {}
+    mask_external_inversion = false_mask.copy()
+    if external_inversion_masks is not None:
+        for name, mask in external_inversion_masks.data_vars.items():
+            bool_mask = mask.astype(bool)
+            external_mask_vars[name] = bool_mask
+            mask_external_inversion = mask_external_inversion | bool_mask
+
     valid_inversion_mask = ~(
         mask_invalid_reflectance
+        | mask_low_reflectance
         | mask_bad_geometry
         | mask_water
         | mask_low_observation_support
         | mask_cloud_for_inversion
         | mask_cloud_shadow_for_inversion
+        | mask_external_inversion
     )
     valid_r0_mask = ~(
         mask_invalid_reflectance
@@ -408,6 +426,7 @@ def _build_component_masks(
     return xr.Dataset(
         data_vars={
             "mask_invalid_reflectance": mask_invalid_reflectance.astype(bool),
+            "mask_low_reflectance_for_inversion": mask_low_reflectance.astype(bool),
             "mask_bad_geometry": mask_bad_geometry.astype(bool),
             "mask_water": mask_water.astype(bool),
             "mask_low_observation_support": mask_low_observation_support.astype(bool),
@@ -416,6 +435,8 @@ def _build_component_masks(
             "mask_snow": mask_snow.astype(bool),
             "mask_cloud_for_inversion": mask_cloud_for_inversion.astype(bool),
             "mask_cloud_shadow_for_inversion": mask_cloud_shadow_for_inversion.astype(bool),
+            "mask_external_inversion": mask_external_inversion.astype(bool),
+            **external_mask_vars,
             "valid_inversion_mask": valid_inversion_mask.astype(bool),
             "valid_r0_mask": valid_r0_mask.astype(bool),
         }
@@ -431,6 +452,7 @@ def prepare_viirs_scene_for_inversion(
     cloud_mask_source: str | Path | xr.Dataset | xr.DataArray | None = None,
     cloud_mask_var: str = "mask_cloud",
     cloud_shadow_mask_var: str = "mask_cloud_shadow",
+    external_inversion_mask_sources: Mapping[str, str | Path | xr.Dataset | xr.DataArray] | None = None,
     keep_intermediate_reflectance: bool = False,
     max_sensor_zenith: float = 65.0,
     max_solar_zenith: float = 85.0,
@@ -438,6 +460,8 @@ def prepare_viirs_scene_for_inversion(
     min_obs_500m: int = 1,
     water_mask_values: tuple[int, ...] = (0, 2, 3, 4, 5, 6, 7),
     cloud_mask_policy: str = "strict",
+    mask_low_reflectance_for_inversion: bool = False,
+    low_reflectance_threshold: float = 0.1,
 ) -> xr.Dataset:
     """
     Prepare a VIIRS scene on a single 500 m analysis grid for downstream inversion.
@@ -464,6 +488,9 @@ def prepare_viirs_scene_for_inversion(
     cloud_shadow_mask_var
         Variable name to read as the cloud-shadow mask when
         ``cloud_mask_source`` is a dataset-like object.
+    external_inversion_mask_sources
+        Optional mapping of mask names to external invalid-pixel mask sources.
+        Finite nonzero pixels are excluded from ``valid_inversion_mask``.
     keep_intermediate_reflectance
         If True, retain intermediate reflectance cubes for debugging:
         ``reflectance_500m_native`` and ``reflectance_1km_on_500m``.
@@ -484,6 +511,12 @@ def prepare_viirs_scene_for_inversion(
         cloud and cloud-shadow masks. ``"snow_wins"`` ignores cloud and shadow
         where VIIRS QA also flags snow. ``"ignore_cloud"`` ignores cloud but
         keeps cloud-shadow masking. ``"ignore_cloud_and_shadow"`` ignores both.
+    mask_low_reflectance_for_inversion
+        If True, exclude pixels from ``valid_inversion_mask`` when every
+        selected reflectance band is below ``low_reflectance_threshold``. This
+        assumes reflectance values are normalized to 0-1.
+    low_reflectance_threshold
+        Reflectance threshold used by ``mask_low_reflectance_for_inversion``.
     """
     start_time = perf_counter()
     logger = logger or LOGGER
@@ -573,8 +606,16 @@ def prepare_viirs_scene_for_inversion(
         prepared.update(external_mask_ds)
         mask_cloud = prepared["mask_cloud_external"]
         mask_cloud_shadow = prepared["mask_cloud_shadow_external"]
+        prepared.attrs["cloud_mask_source"] = str(cloud_mask_source) if isinstance(cloud_mask_source, (str, Path)) else type(cloud_mask_source).__name__
 
     mask_snow = prepared["mask_snow_qa"]
+    external_inversion_masks = load_external_inversion_masks(
+        external_inversion_mask_sources,
+        target_x=x,
+        target_y=y,
+    )
+    if external_inversion_masks.data_vars:
+        prepared.update(external_inversion_masks)
 
     mask_ds = _build_component_masks(
         prepared["reflectance"],
@@ -592,9 +633,27 @@ def prepare_viirs_scene_for_inversion(
         min_obs_1km=min_obs_1km,
         min_obs_500m=min_obs_500m,
         cloud_mask_policy=cloud_mask_policy,
+        mask_low_reflectance_for_inversion=mask_low_reflectance_for_inversion,
+        low_reflectance_threshold=low_reflectance_threshold,
+        external_inversion_masks=external_inversion_masks,
     )
     prepared.update(mask_ds)
     prepared.attrs["cloud_mask_policy"] = cloud_mask_policy
+    prepared.attrs["mask_low_reflectance_for_inversion"] = bool(mask_low_reflectance_for_inversion)
+    prepared.attrs["low_reflectance_threshold"] = float(low_reflectance_threshold)
+    prepared.attrs["external_inversion_mask_names"] = (
+        ",".join(str(name) for name in external_inversion_masks.data_vars)
+        if external_inversion_masks.data_vars
+        else ""
+    )
+    prepared.attrs["external_inversion_mask_sources"] = (
+        ",".join(
+            f"{name}={source if isinstance(source, (str, Path)) else type(source).__name__}"
+            for name, source in external_inversion_mask_sources.items()
+        )
+        if external_inversion_mask_sources
+        else ""
+    )
 
     prepared["reflectance"].attrs["selected_bands"] = bands
     prepared["reflectance"].attrs["band_selection_source"] = band_selection_source
@@ -619,6 +678,8 @@ def prepare_viirs_scene_for_inversion(
         selected_bands=bands,
         band_selection_source=band_selection_source,
         cloud_mask_policy=cloud_mask_policy,
+        mask_low_reflectance_for_inversion=mask_low_reflectance_for_inversion,
+        low_reflectance_threshold=low_reflectance_threshold,
         cloud_mask_source=str(cloud_mask_source) if isinstance(cloud_mask_source, (str, Path)) else type(cloud_mask_source).__name__ if cloud_mask_source is not None else None,
         keep_intermediate_reflectance=keep_intermediate_reflectance,
         output_shape=list(prepared["reflectance"].shape),

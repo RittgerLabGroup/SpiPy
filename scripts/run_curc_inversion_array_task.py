@@ -22,7 +22,8 @@ def main(argv: list[str]) -> int:
             "usage: run_curc_inversion_array_task.py <manifest.json> [task_index] "
             "[--execute] [--overwrite] [--lut-file <path>] [--execution-profile <name>] "
             "[--apply-valid-inversion-mask <true|false>] [--use-grouping <true|false>] "
-            "[--grouping-method <name>]",
+            "[--grouping-method <name>] [--mask-low-reflectance-for-inversion <true|false>] "
+            "[--low-reflectance-threshold <value>] [--include-grouped-reflectance-rmse <true|false>]",
             file=sys.stderr,
         )
         return 2
@@ -34,6 +35,9 @@ def main(argv: list[str]) -> int:
     lut_file = None
     execution_profile = "cluster"
     apply_valid_inversion_mask = None
+    mask_low_reflectance_for_inversion = None
+    low_reflectance_threshold = None
+    include_grouped_reflectance_rmse = None
     use_grouping = None
     grouping_method = None
 
@@ -53,6 +57,15 @@ def main(argv: list[str]) -> int:
         elif token == "--apply-valid-inversion-mask":
             i += 1
             apply_valid_inversion_mask = argv[i].strip().lower() in {"1", "true", "yes", "y"}
+        elif token == "--mask-low-reflectance-for-inversion":
+            i += 1
+            mask_low_reflectance_for_inversion = argv[i].strip().lower() in {"1", "true", "yes", "y"}
+        elif token == "--low-reflectance-threshold":
+            i += 1
+            low_reflectance_threshold = float(argv[i])
+        elif token == "--include-grouped-reflectance-rmse":
+            i += 1
+            include_grouped_reflectance_rmse = argv[i].strip().lower() in {"1", "true", "yes", "y"}
         elif token == "--use-grouping":
             i += 1
             use_grouping = argv[i].strip().lower() in {"1", "true", "yes", "y"}
@@ -73,6 +86,9 @@ def main(argv: list[str]) -> int:
         overwrite=overwrite,
         dry_run=not execute,
         apply_valid_inversion_mask=apply_valid_inversion_mask,
+        mask_low_reflectance_for_inversion=mask_low_reflectance_for_inversion,
+        low_reflectance_threshold=low_reflectance_threshold,
+        include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
         use_grouping=use_grouping,
         grouping_method=grouping_method,
     )

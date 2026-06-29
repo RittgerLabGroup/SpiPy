@@ -153,6 +153,26 @@ def test_prepare_modis_scene_for_inversion_can_ignore_cloud_mask_for_inversion()
     assert relaxed.attrs["cloud_mask_policy"] == "ignore_cloud"
 
 
+def test_prepare_modis_scene_for_inversion_can_mask_all_low_reflectance_pixels():
+    raw = build_mock_modis_raw_dataset()
+    reflectance_500m = raw["reflectance_500m"].copy()
+    reflectance_500m.loc[dict(y_500m=0, x_500m=0)] = 0.05
+    reflectance_500m.loc[dict(y_500m=0, x_500m=1)] = 0.10
+    raw["reflectance_500m"] = reflectance_500m
+
+    default = prepare_modis_scene_for_inversion(raw)
+    masked = prepare_modis_scene_for_inversion(raw, mask_low_reflectance_for_inversion=True)
+
+    assert not bool(default["mask_low_reflectance_for_inversion"].any())
+    assert bool(masked["mask_low_reflectance_for_inversion"].isel(y=0, x=0))
+    assert not bool(masked["valid_inversion_mask"].isel(y=0, x=0))
+    assert not bool(masked["mask_low_reflectance_for_inversion"].isel(y=0, x=1))
+    assert bool(masked["valid_inversion_mask"].isel(y=0, x=1))
+    assert bool(masked["valid_r0_mask"].isel(y=0, x=0))
+    assert masked.attrs["mask_low_reflectance_for_inversion"] is True
+    assert masked.attrs["low_reflectance_threshold"] == 0.1
+
+
 def test_prepare_modis_scene_for_inversion_keeps_water_valid_for_r0():
     raw = build_mock_modis_raw_dataset()
     raw["state_1km"] = xr.zeros_like(raw["state_1km"])

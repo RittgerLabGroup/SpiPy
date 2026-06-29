@@ -40,10 +40,13 @@ def test_speedy_invert_dask_passes_spectrum_shade_to_array2d(monkeypatch):
         grouping_reflectance_tol,
         grouping_background_tol,
         grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
     ):
         captured["spectrum_shade"] = spectrum_shade
         captured["valid_mask"] = valid_mask
-        return np.zeros(spectra_targets.shape[:2] + (4,), dtype=np.float32)
+        captured["include_grouped_reflectance_rmse"] = include_grouped_reflectance_rmse
+        n_results = invert._n_result_variables(include_grouped_reflectance_rmse)
+        return np.zeros(spectra_targets.shape[:2] + (n_results,), dtype=np.float32)
 
     monkeypatch.setattr(invert, "speedy_invert_array2d", fake_speedy_invert_array2d)
 
@@ -71,12 +74,15 @@ def test_speedy_invert_dask_passes_spectrum_shade_to_array2d(monkeypatch):
         interpolator=DummyInterpolator(),
         spectrum_shade=spectrum_shade,
         scatter_lut=False,
+        include_grouped_reflectance_rmse=True,
     )
     computed = result.compute()
 
     np.testing.assert_array_equal(captured["spectrum_shade"], spectrum_shade)
     np.testing.assert_array_equal(captured["valid_mask"], np.ones((1, 1), dtype=bool))
+    assert captured["include_grouped_reflectance_rmse"]
     assert computed["fsca"].shape == (2, 2)
+    assert computed["grouped_reflectance_rmse"].shape == (2, 2)
 
 
 def test_speedy_invert_array2d_grouping_broadcasts_results_and_skips_invalid(monkeypatch):
@@ -96,17 +102,20 @@ def test_speedy_invert_array2d_grouping_broadcasts_results_and_skips_invalid(mon
         max_eval,
         x0,
         algorithm,
+        include_grouped_reflectance_rmse,
     ):
         captured["targets"] = spectra_targets.copy()
         captured["backgrounds"] = spectra_backgrounds.copy()
         captured["solar"] = obs_solar_angles.copy()
         n = spectra_targets.shape[0]
+        assert include_grouped_reflectance_rmse
         return np.column_stack(
             [
                 np.arange(n, dtype=np.float64),
                 np.arange(n, dtype=np.float64) + 10.0,
                 np.arange(n, dtype=np.float64) + 20.0,
                 np.arange(n, dtype=np.float64) + 30.0,
+                np.arange(n, dtype=np.float64) + 40.0,
             ]
         )
 
@@ -142,15 +151,16 @@ def test_speedy_invert_array2d_grouping_broadcasts_results_and_skips_invalid(mon
         use_grouping=True,
         grouping_method="first",
         grouping_tolerance=0.02,
+        include_grouped_reflectance_rmse=True,
     )
 
     assert captured["targets"].shape[0] == 2
     np.testing.assert_allclose(captured["targets"], np.array([[0.2, 0.3], [0.8, 0.9]]))
     np.testing.assert_allclose(captured["backgrounds"], np.array([[0.1, 0.1], [0.4, 0.4]]))
     np.testing.assert_allclose(captured["solar"], np.array([30.0, 40.0]))
-    np.testing.assert_allclose(result[0, 0], np.array([0.0, 10.0, 20.0, 30.0]))
-    np.testing.assert_allclose(result[0, 1], np.array([0.0, 10.0, 20.0, 30.0]))
-    np.testing.assert_allclose(result[1, 0], np.array([1.0, 11.0, 21.0, 31.0]))
+    np.testing.assert_allclose(result[0, 0], np.array([0.0, 10.0, 20.0, 30.0, 40.0]))
+    np.testing.assert_allclose(result[0, 1], np.array([0.0, 10.0, 20.0, 30.0, 40.0]))
+    np.testing.assert_allclose(result[1, 0], np.array([1.0, 11.0, 21.0, 31.0, 41.0]))
     assert np.isnan(result[1, 1]).all()
 
 

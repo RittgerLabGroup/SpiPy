@@ -23,6 +23,9 @@ INVERSION_REQUIRED_VARS = (
     "grain_size",
     "valid_inversion_mask",
 )
+INVERSION_OPTIONAL_VARS = (
+    "grouped_reflectance_rmse",
+)
 
 
 def _netcdf_safe_attr_value(value):
@@ -100,6 +103,9 @@ def validate_inversion_output_dataset(
 
     for name in INVERSION_REQUIRED_VARS:
         if dataset[name].dims != ("y", "x"):
+            raise ValueError(f"Unexpected dims for {name}: {dataset[name].dims}")
+    for name in INVERSION_OPTIONAL_VARS:
+        if name in dataset and dataset[name].dims != ("y", "x"):
             raise ValueError(f"Unexpected dims for {name}: {dataset[name].dims}")
 
     if "raw_canopy_fraction" in dataset and dataset["raw_canopy_fraction"].dims != ("y", "x"):
