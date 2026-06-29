@@ -528,6 +528,71 @@ def _write_attempt_csv(csv_path: Path, attempts: tuple[InversionTaskAttempt, ...
             writer.writerow({field: getattr(attempt, field) for field in CSV_FIELDS})
 
 
+def _csv_optional(value: str) -> str | None:
+    return None if value == "" else value
+
+
+def _csv_bool(value: str) -> bool:
+    return value.lower() in {"1", "true", "yes"}
+
+
+def _csv_float_or_none(value: str) -> float | None:
+    return None if value == "" or value.lower() == "none" else float(value)
+
+
+def _read_attempt_csv(csv_path: Path) -> tuple[InversionTaskAttempt, ...]:
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    attempts: list[InversionTaskAttempt] = []
+    for row in rows:
+        attempts.append(
+            InversionTaskAttempt(
+                run_group_id=row["run_group_id"],
+                water_year=int(row["water_year"]),
+                scene_date=row["scene_date"],
+                task_index=int(row["task_index"]),
+                attempt_ordinal=int(row["attempt_ordinal"]),
+                retry_count=int(row["retry_count"]),
+                submission_kind=row["submission_kind"],
+                last_attempt_for_date=_csv_bool(row["last_attempt_for_date"]),
+                status=row["status"],
+                failure_code=row["failure_code"],
+                retry_recommended=_csv_bool(row["retry_recommended"]),
+                loaded_existing=_csv_bool(row["loaded_existing"]),
+                submitted=_csv_bool(row["submitted"]),
+                started=_csv_bool(row["started"]),
+                completed=_csv_bool(row["completed"]),
+                output_valid=_csv_bool(row["output_valid"]),
+                output_path=row["output_path"],
+                log_path=row["log_path"],
+                manifest_path=row["manifest_path"],
+                log_dir=row["log_dir"],
+                sensor=row["sensor"],
+                platform=row["platform"],
+                tile=row["tile"],
+                slurm_array_job_id=_csv_optional(row["slurm_array_job_id"]),
+                slurm_array_task_id=_csv_optional(row["slurm_array_task_id"]),
+                slurm_job_id=_csv_optional(row["slurm_job_id"]),
+                slurm_job_name=_csv_optional(row["slurm_job_name"]),
+                slurm_cluster_name=_csv_optional(row["slurm_cluster_name"]),
+                start_time_utc=_csv_optional(row["start_time_utc"]),
+                end_time_utc=_csv_optional(row["end_time_utc"]),
+                elapsed_seconds=_csv_float_or_none(row["elapsed_seconds"]),
+                message=row["message"],
+            )
+        )
+    return tuple(attempts)
+
+
+def _collect_or_read_tile_attempts(manifest_path: Path) -> tuple[InversionTaskAttempt, ...]:
+    manifest_payload = load_inversion_array_manifest(manifest_path)
+    csv_path = _tile_summary_csv_path(manifest_payload, manifest_path)
+    if csv_path.exists():
+        return _read_attempt_csv(csv_path)
+    return _collect_task_attempts(manifest_path)
+
+
 def _tile_summary_csv_path(manifest_payload: dict[str, object], manifest_path: str | Path) -> Path:
     tile_dir = _manifest_tile_run_dir(manifest_payload, manifest_path)
     return tile_dir / f"run_inversion_{manifest_payload['tile']}_wy{manifest_payload['water_year']}_summary.csv"
@@ -624,6 +689,17 @@ def write_tile_summary_artifacts(
     _write_attempt_csv(csv_path, attempts)
     txt_path.write_text("\n".join(_render_tile_summary_lines(manifest_payload, resolved_manifest_path, attempts)) + "\n", encoding="utf-8")
     return csv_path, txt_path
+
+
+def write_or_reuse_tile_summary_artifacts(manifest_path: str | Path) -> tuple[Path, Path]:
+    """Return existing tile summary artifacts, writing them only when missing."""
+    resolved_manifest_path = Path(manifest_path).expanduser().resolve()
+    manifest_payload = load_inversion_array_manifest(resolved_manifest_path)
+    csv_path = _tile_summary_csv_path(manifest_payload, resolved_manifest_path)
+    txt_path = _tile_summary_txt_path(manifest_payload, resolved_manifest_path)
+    if csv_path.exists() and txt_path.exists():
+        return csv_path, txt_path
+    return write_tile_summary_artifacts(resolved_manifest_path)
 
 
 def write_status_summary_artifacts(
@@ -790,17 +866,17 @@ def write_run_group_summary_artifacts(run_group_dir: str | Path) -> tuple[Path, 
     if not manifest_paths:
         raise ValueError(f"No tile manifests found under run group: {resolved_run_group_dir}")
 
+    manifest_payload = load_inversion_array_manifest(manifest_paths[0])
     attempts = tuple(
         sorted(
             (
                 attempt
                 for manifest_path in manifest_paths
-                for attempt in _collect_task_attempts(manifest_path)
+                for attempt in _collect_or_read_tile_attempts(manifest_path)
             ),
             key=lambda attempt: (attempt.tile, attempt.scene_date, attempt.retry_count, attempt.attempt_ordinal, attempt.task_index),
         )
     )
-    manifest_payload = load_inversion_array_manifest(manifest_paths[0])
     csv_path = _group_summary_csv_path(manifest_payload, manifest_paths[0])
     txt_path = _group_summary_txt_path(manifest_payload, manifest_paths[0])
     _write_attempt_csv(csv_path, attempts)

@@ -11,7 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from workflows.curc.status import list_run_group_tile_manifests, write_run_group_summary_artifacts, write_tile_summary_artifacts
+from workflows.curc.status import (
+    list_run_group_tile_manifests,
+    write_or_reuse_tile_summary_artifacts,
+    write_run_group_summary_artifacts,
+)
 
 
 def main(argv: list[str]) -> int:
@@ -26,7 +30,7 @@ def main(argv: list[str]) -> int:
 
     tile_summaries: list[dict[str, str]] = []
     for manifest_path in manifests:
-        csv_path, txt_path = write_tile_summary_artifacts(manifest_path)
+        csv_path, txt_path = write_or_reuse_tile_summary_artifacts(manifest_path)
         tile_summaries.append(
             {
                 "manifest_path": str(manifest_path),
