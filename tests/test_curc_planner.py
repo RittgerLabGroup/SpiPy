@@ -177,3 +177,4 @@ def test_viirs_non_snpp_platforms_use_platform_specific_products_and_paths(tmp_p
     assert array_plan.platform == platform
     assert array_plan.job_name == f"spipy-viirs-{platform}-h08v05-wy2023"
     assert array_plan.tasks[0].output_path.endswith(f"/output/viirs/{platform}/h08v05/raw/wy2023")
+    assert array_plan.terrain_ancillary_root is None

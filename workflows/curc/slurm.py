@@ -42,6 +42,12 @@ def render_array_submission_payload(
         "include_grouped_reflectance_rmse": plan.include_grouped_reflectance_rmse,
         "use_grouping": plan.use_grouping,
         "grouping_method": plan.grouping_method,
+        "include_albedo": plan.include_albedo,
+        "include_radiative_forcing": plan.include_radiative_forcing,
+        "include_delta_vis": plan.include_delta_vis,
+        "albedo_lut_path": plan.albedo_lut_path,
+        "radiative_forcing_lut_path": plan.radiative_forcing_lut_path,
+        "terrain_ancillary_root": plan.terrain_ancillary_root,
         "notes": list(plan.notes),
         "r0_year": plan.r0_year,
         "output_root": plan.tasks[0].output_path if plan.tasks else None,
@@ -90,6 +96,12 @@ def render_array_submission_payload_from_manifest(manifest_path: str | Path) -> 
         "include_grouped_reflectance_rmse": bool(payload.get("include_grouped_reflectance_rmse", False)),
         "use_grouping": bool(payload.get("use_grouping", True)),
         "grouping_method": str(payload.get("grouping_method", "chunk_bin_mean")),
+        "include_albedo": bool(payload.get("include_albedo", True)),
+        "include_radiative_forcing": bool(payload.get("include_radiative_forcing", True)),
+        "include_delta_vis": bool(payload.get("include_delta_vis", True)),
+        "albedo_lut_path": payload.get("albedo_lut_path"),
+        "radiative_forcing_lut_path": payload.get("radiative_forcing_lut_path"),
+        "terrain_ancillary_root": payload.get("terrain_ancillary_root"),
         "r0_year": payload.get("r0_year"),
         "output_root": payload["tasks"][0]["output_path"] if payload.get("tasks") else None,
         "manifest_path": str(Path(manifest_path).expanduser().resolve()),
@@ -133,8 +145,20 @@ def render_sbatch_command_for_array_payload(
             str(bool(payload.get("use_grouping", True))).lower(),
             "--grouping-method",
             shlex.quote(str(payload.get("grouping_method", "chunk_bin_mean"))),
+            "--include-albedo",
+            str(bool(payload.get("include_albedo", True))).lower(),
+            "--include-radiative-forcing",
+            str(bool(payload.get("include_radiative_forcing", True))).lower(),
+            "--include-delta-vis",
+            str(bool(payload.get("include_delta_vis", True))).lower(),
         ]
     )
+    if payload.get("albedo_lut_path") is not None:
+        wrapped_command += " --albedo-lut-path " + shlex.quote(str(payload["albedo_lut_path"]))
+    if payload.get("radiative_forcing_lut_path") is not None:
+        wrapped_command += " --radiative-forcing-lut-path " + shlex.quote(str(payload["radiative_forcing_lut_path"]))
+    if payload.get("terrain_ancillary_root") is not None:
+        wrapped_command += " --terrain-ancillary-root " + shlex.quote(str(payload["terrain_ancillary_root"]))
     slurm_args: list[str] = []
     if slurm_profile.account:
         slurm_args.extend(["--account", slurm_profile.account])

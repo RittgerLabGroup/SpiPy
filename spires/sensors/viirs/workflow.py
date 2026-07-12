@@ -7,8 +7,10 @@ from pathlib import Path
 
 import xarray as xr
 
+from spires.albedo import DEFAULT_ALBEDO_LUT_PATH, DEFAULT_RADIATIVE_FORCING_LUT_PATH
 from spires.sensors.full_workflow import (
     AUTO_CANOPY_FRACTION,
+    DEFAULT_VIIRS_TERRAIN_ANCILLARY_ROOT,
     SensorExecutionProfile,
     get_default_execution_profile,
     run_sensor_inversion,
@@ -81,6 +83,14 @@ def run_viirs_inversion(
     canopy_fraction=AUTO_CANOPY_FRACTION,
     ice_fraction=None,
     canopy_vertical_to_horizontal_crown_radius: float = 2.7,
+    include_albedo: bool = True,
+    include_radiative_forcing: bool = True,
+    include_delta_vis: bool = True,
+    albedo_lut_path: str | Path | None = DEFAULT_ALBEDO_LUT_PATH,
+    radiative_forcing_lut_path: str | Path | None = DEFAULT_RADIATIVE_FORCING_LUT_PATH,
+    terrain_ancillary_root: str | Path | None = DEFAULT_VIIRS_TERRAIN_ANCILLARY_ROOT,
+    slope_path=None,
+    aspect_path=None,
     execution_profile: str | ViirsExecutionProfile | None = None,
     logger: logging.Logger | None = None,
     **prepare_kwargs,
@@ -124,6 +134,14 @@ def run_viirs_inversion(
         canopy_fraction=canopy_fraction,
         ice_fraction=ice_fraction,
         canopy_vertical_to_horizontal_crown_radius=canopy_vertical_to_horizontal_crown_radius,
+        include_albedo=include_albedo,
+        include_radiative_forcing=include_radiative_forcing,
+        include_delta_vis=include_delta_vis,
+        albedo_lut_path=albedo_lut_path,
+        radiative_forcing_lut_path=radiative_forcing_lut_path,
+        terrain_ancillary_root=terrain_ancillary_root,
+        slope_path=slope_path,
+        aspect_path=aspect_path,
         execution_profile=execution_profile,
         logger=logger or LOGGER,
         **prepare_kwargs,

@@ -25,6 +25,8 @@ INVERSION_REQUIRED_VARS = (
 )
 INVERSION_OPTIONAL_VARS = (
     "grouped_reflectance_rmse",
+    "solar_zenith",
+    "solar_azimuth",
 )
 
 

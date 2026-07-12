@@ -11,6 +11,11 @@ from spires.sensors.modis.workflow import (
 
 
 TEST_LUT_FILE = "SpiPy/tests/data/lut_modis_1_2_3_4_5_6_7_3um_dust_bandpass.mat"
+NO_ALBEDO_PRODUCTS = {
+    "include_albedo": False,
+    "include_radiative_forcing": False,
+    "include_delta_vis": False,
+}
 
 
 def build_mock_prepared_scene() -> xr.Dataset:
@@ -131,6 +136,7 @@ def test_run_modis_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         execution_profile="local",
         algorithm=5,
         apply_valid_inversion_mask=True,
+        **NO_ALBEDO_PRODUCTS,
     )
 
     assert captured["target_chunks"] is not None
@@ -198,6 +204,7 @@ def test_run_modis_inversion_can_keep_outputs_unmasked(monkeypatch):
         lut_file=TEST_LUT_FILE,
         execution_profile="local",
         apply_valid_inversion_mask=False,
+        **NO_ALBEDO_PRODUCTS,
     )
 
     assert captured["valid_mask"] is None
@@ -257,7 +264,7 @@ def test_run_modis_inversion_preserves_reflectance_in_output(monkeypatch, tmp_pa
     monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
     monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
-    result = run_modis_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local")
+    result = run_modis_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local", **NO_ALBEDO_PRODUCTS)
 
     assert "reflectance" in result
     assert result["reflectance"].dims == ("y", "x", "band")

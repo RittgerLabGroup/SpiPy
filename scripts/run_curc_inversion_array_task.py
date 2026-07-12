@@ -40,6 +40,12 @@ def main(argv: list[str]) -> int:
     include_grouped_reflectance_rmse = None
     use_grouping = None
     grouping_method = None
+    include_albedo = None
+    include_radiative_forcing = None
+    include_delta_vis = None
+    albedo_lut_path = None
+    radiative_forcing_lut_path = None
+    terrain_ancillary_root = None
 
     i = 2
     while i < len(argv):
@@ -72,6 +78,24 @@ def main(argv: list[str]) -> int:
         elif token == "--grouping-method":
             i += 1
             grouping_method = argv[i]
+        elif token == "--include-albedo":
+            i += 1
+            include_albedo = argv[i].strip().lower() in {"1", "true", "yes", "y"}
+        elif token == "--include-radiative-forcing":
+            i += 1
+            include_radiative_forcing = argv[i].strip().lower() in {"1", "true", "yes", "y"}
+        elif token == "--include-delta-vis":
+            i += 1
+            include_delta_vis = argv[i].strip().lower() in {"1", "true", "yes", "y"}
+        elif token == "--albedo-lut-path":
+            i += 1
+            albedo_lut_path = argv[i]
+        elif token == "--radiative-forcing-lut-path":
+            i += 1
+            radiative_forcing_lut_path = argv[i]
+        elif token == "--terrain-ancillary-root":
+            i += 1
+            terrain_ancillary_root = argv[i]
         elif task_index is None:
             task_index = int(token)
         else:
@@ -91,6 +115,12 @@ def main(argv: list[str]) -> int:
         include_grouped_reflectance_rmse=include_grouped_reflectance_rmse,
         use_grouping=use_grouping,
         grouping_method=grouping_method,
+        include_albedo=include_albedo,
+        include_radiative_forcing=include_radiative_forcing,
+        include_delta_vis=include_delta_vis,
+        albedo_lut_path=albedo_lut_path,
+        radiative_forcing_lut_path=radiative_forcing_lut_path,
+        terrain_ancillary_root=terrain_ancillary_root,
     )
     rendered = asdict(context) if is_dataclass(context) else context
     if os.environ.get("SLURM_JOB_ID") is None:

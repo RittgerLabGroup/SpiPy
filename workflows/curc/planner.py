@@ -230,6 +230,14 @@ def plan_viirs_snpp_inversion_array(
         include_grouped_reflectance_rmse=canonical.include_grouped_reflectance_rmse,
         use_grouping=canonical.use_grouping,
         grouping_method=canonical.grouping_method,
+        include_albedo=canonical.include_albedo,
+        include_radiative_forcing=canonical.include_radiative_forcing,
+        include_delta_vis=canonical.include_delta_vis,
+        albedo_lut_path=None if canonical.albedo_lut_path is None else str(canonical.albedo_lut_path),
+        radiative_forcing_lut_path=(
+            None if canonical.radiative_forcing_lut_path is None else str(canonical.radiative_forcing_lut_path)
+        ),
+        terrain_ancillary_root=None if canonical.terrain_ancillary_root is None else str(canonical.terrain_ancillary_root),
         tasks=tuple(tasks),
         slurm_profile=canonical.slurm_profile,
         notes=(

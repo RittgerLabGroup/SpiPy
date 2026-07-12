@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from workflows.curc.config import SlurmProfile
 from workflows.curc.runtime import (
     build_viirs_snpp_inversion_runtime_context,
@@ -9,14 +11,20 @@ from workflows.curc.steps import InversionTaskPlan, SlurmArrayPlan
 from workflows.curc.task_manifest import write_inversion_array_manifest
 
 
-def test_runtime_context_resolves_curc_mask_inputs(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("platform", "scene_name"),
+    (
+        ("snpp", "VNP09GA.A2023274.h08v04.002.2023277125049.h5"),
+        ("noaa20", "VJ109GA.A2023274.h08v04.002.2023277125049.h5"),
+        ("noaa21", "VJ209GA.A2023274.h08v04.002.2023277125049.h5"),
+    ),
+)
+def test_runtime_context_resolves_curc_mask_inputs(tmp_path: Path, platform: str, scene_name: str) -> None:
     scratch = tmp_path / "scratch"
     tile = "h08v04"
-    platform = "snpp"
     water_year = 2024
     date = "2023-10-01"
     date_token = date.replace("-", "")
-    scene_name = "VNP09GA.A2023274.h08v04.002.2023277125049.h5"
 
     reflectance_dir = scratch / "input" / "viirs" / platform / "reflectance" / tile / str(water_year)
     ancillary_root = scratch / "input" / "viirs" / platform / "ancillary" / tile
@@ -33,6 +41,8 @@ def test_runtime_context_resolves_curc_mask_inputs(tmp_path: Path) -> None:
     (ancillary_root / f"{tile}_water_mod44_50.tif").touch()
     (ancillary_root / f"{tile}_ice_rgi60_202309.tif").touch()
     (ancillary_root / f"{tile}_stc_false_positive_manual_20230920_mod44_50.tif").touch()
+    (ancillary_root / f"{tile}_slope_gmted_med075.tif").touch()
+    (ancillary_root / f"{tile}_aspect_gmted_med075_ccw_from_south.tif").touch()
     (cloud_dir / f"{platform}_{tile}_{date_token}_cloud_mask.tif").touch()
 
     task = InversionTaskPlan(
@@ -77,4 +87,7 @@ def test_runtime_context_resolves_curc_mask_inputs(tmp_path: Path) -> None:
     assert context.water_mask_path == str(ancillary_root / f"{tile}_water_mod44_50.tif")
     assert context.ice_fraction_path == str(ancillary_root / f"{tile}_ice_rgi60_202309.tif")
     assert context.playa_mask_path == str(ancillary_root / f"{tile}_stc_false_positive_manual_20230920_mod44_50.tif")
+    assert context.terrain_ancillary_root == str(scratch / "input" / "viirs" / platform / "ancillary")
+    assert context.slope_path == str(ancillary_root / f"{tile}_slope_gmted_med075.tif")
+    assert context.aspect_path == str(ancillary_root / f"{tile}_aspect_gmted_med075_ccw_from_south.tif")
     assert not any(missing.values())

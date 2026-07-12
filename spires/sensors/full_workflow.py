@@ -11,6 +11,13 @@ from typing import Callable
 import numpy as np
 import xarray as xr
 
+from spires.albedo import (
+    DEFAULT_ALBEDO_LUT_PATH,
+    DEFAULT_RADIATIVE_FORCING_LUT_PATH,
+    AlbedoProductFlags,
+    generate_albedo_products,
+    validate_requested_lut_paths,
+)
 from spires.interpolator import LutInterpolator
 from spires.invert import speedy_invert_dask
 from spires.logging_utils import log_event
@@ -19,6 +26,8 @@ from spires.sensors.io import sanitize_netcdf_dataset
 
 LOGGER = logging.getLogger(__name__)
 AUTO_CANOPY_FRACTION = "auto"
+DEFAULT_VIIRS_TERRAIN_ANCILLARY_ROOT: Path | None = None
+DEFAULT_VIIRS_TERRAIN_ANCILLARY_BASE = Path("/scratch/alpine/ropa5718/spipy/input/viirs")
 
 PrepareSceneFn = Callable[..., xr.Dataset]
 NormalizeBandNamesFn = Callable[[tuple[str, ...] | list[str]], list[str]]
@@ -202,6 +211,133 @@ def resolve_fraction_layer(source, template: xr.DataArray, *, name: str, sensor_
     return data.clip(min=0.0, max=1.0)
 
 
+def resolve_terrain_ancillary_path(
+    *,
+    source,
+    terrain_ancillary_root: str | Path | None,
+    tile: str | None,
+    filename: str,
+) -> object:
+    if source is not None:
+        if isinstance(source, (xr.DataArray, xr.Dataset, Number)):
+            return source
+        return Path(source).expanduser()
+    if terrain_ancillary_root is None or tile is None:
+        return None
+
+    root = Path(terrain_ancillary_root).expanduser()
+    candidates = (root / tile / filename, root / filename)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def infer_default_terrain_ancillary_root(sensor_name: str, scene_ds: xr.Dataset) -> Path | None:
+    """Return a platform-local terrain root when the prepared scene identifies one."""
+    if sensor_name != "viirs":
+        return None
+    platform = scene_ds.attrs.get("platform")
+    if not platform:
+        return None
+    return DEFAULT_VIIRS_TERRAIN_ANCILLARY_BASE / str(platform).lower() / "ancillary"
+
+
+def resolve_terrain_layer(
+    source,
+    template: xr.DataArray,
+    *,
+    name: str,
+    sensor_display_name: str,
+) -> xr.DataArray:
+    if source is None:
+        raise ValueError(f"{name} terrain source is required for terrain-corrected albedo")
+    data = open_dataarray_like(source, data_var_name=name)
+    return as_yx_dataarray(data, template, name=name, sensor_display_name=sensor_display_name)
+
+
+def add_albedo_product_layers(
+    results: xr.Dataset,
+    scene_ds: xr.Dataset,
+    *,
+    sensor_display_name: str,
+    include_albedo: bool,
+    include_radiative_forcing: bool,
+    include_delta_vis: bool,
+    albedo_lut_path: str | Path | None,
+    radiative_forcing_lut_path: str | Path | None,
+    terrain_ancillary_root: str | Path | None,
+    slope_path=None,
+    aspect_path=None,
+) -> xr.Dataset:
+    flags = AlbedoProductFlags(
+        include_albedo=include_albedo,
+        include_radiative_forcing=include_radiative_forcing,
+        include_delta_vis=include_delta_vis,
+    )
+    if not flags.requested_variables:
+        return results
+
+    validate_requested_lut_paths(
+        flags,
+        albedo_lut_path=albedo_lut_path,
+        radiative_forcing_lut_path=radiative_forcing_lut_path,
+    )
+
+    tile = scene_ds.attrs.get("tile") or results.attrs.get("tile")
+    slope_source = resolve_terrain_ancillary_path(
+        source=slope_path,
+        terrain_ancillary_root=terrain_ancillary_root,
+        tile=tile,
+        filename=f"{tile}_slope_gmted_med075.tif" if tile else "slope_gmted_med075.tif",
+    )
+    aspect_source = resolve_terrain_ancillary_path(
+        source=aspect_path,
+        terrain_ancillary_root=terrain_ancillary_root,
+        tile=tile,
+        filename=f"{tile}_aspect_gmted_med075_ccw_from_south.tif" if tile else "aspect_gmted_med075_ccw_from_south.tif",
+    )
+
+    slope = None
+    aspect = None
+    if flags.include_albedo:
+        template = results["grain_size"]
+        slope = resolve_terrain_layer(
+            slope_source,
+            template,
+            name="slope",
+            sensor_display_name=sensor_display_name,
+        )
+        aspect = resolve_terrain_layer(
+            aspect_source,
+            template,
+            name="aspect",
+            sensor_display_name=sensor_display_name,
+        )
+
+    products = generate_albedo_products(
+        results,
+        flags=flags,
+        albedo_luts=albedo_lut_path if flags.requires_albedo_lut else None,
+        radiative_forcing_luts=radiative_forcing_lut_path if flags.requires_radiative_forcing_lut else None,
+        slope=slope,
+        aspect=aspect,
+    )
+    for name in products.data_vars:
+        results[name] = products[name]
+
+    results.attrs["include_albedo"] = bool(include_albedo)
+    results.attrs["include_radiative_forcing"] = bool(include_radiative_forcing)
+    results.attrs["include_delta_vis"] = bool(include_delta_vis)
+    if flags.requires_albedo_lut:
+        results.attrs["albedo_lut_file"] = str(albedo_lut_path)
+        results.attrs["albedo_slope_source"] = str(slope_source)
+        results.attrs["albedo_aspect_source"] = str(aspect_source)
+    if flags.requires_radiative_forcing_lut:
+        results.attrs["radiative_forcing_lut_file"] = str(radiative_forcing_lut_path)
+    return results
+
+
 def view_adjust_canopy_fraction(
     canopy_fraction: xr.DataArray,
     sensor_zenith: xr.DataArray,
@@ -216,6 +352,28 @@ def view_adjust_canopy_fraction(
     adjusted.attrs = {}
     adjusted.encoding.clear()
     return adjusted
+
+
+def add_solar_geometry_layers(results: xr.Dataset, scene_ds: xr.Dataset) -> xr.Dataset:
+    """Persist scene solar geometry needed by downstream albedo products."""
+    for variable_name, long_name in (
+        ("solar_zenith", "Solar zenith angle"),
+        ("solar_azimuth", "Solar azimuth angle"),
+    ):
+        if variable_name not in scene_ds:
+            continue
+        solar = scene_ds[variable_name]
+        if set(solar.dims) != {"y", "x"}:
+            solar = solar.squeeze(drop=True)
+        if set(solar.dims) != {"y", "x"}:
+            continue
+        solar = solar.transpose("y", "x").astype(np.float32).rename(variable_name)
+        solar.attrs.update(
+            long_name=solar.attrs.get("long_name", long_name),
+            units=solar.attrs.get("units", "degrees"),
+        )
+        results[variable_name] = solar
+    return results
 
 
 def add_snow_fraction_layers(
@@ -423,6 +581,14 @@ def run_sensor_inversion(
     canopy_fraction=AUTO_CANOPY_FRACTION,
     ice_fraction=None,
     canopy_vertical_to_horizontal_crown_radius: float = 2.7,
+    include_albedo: bool = True,
+    include_radiative_forcing: bool = True,
+    include_delta_vis: bool = True,
+    albedo_lut_path: str | Path | None = DEFAULT_ALBEDO_LUT_PATH,
+    radiative_forcing_lut_path: str | Path | None = DEFAULT_RADIATIVE_FORCING_LUT_PATH,
+    terrain_ancillary_root: str | Path | None = None,
+    slope_path=None,
+    aspect_path=None,
     execution_profile: str | SensorExecutionProfile | None = None,
     logger: logging.Logger | None = None,
     **prepare_kwargs,
@@ -536,6 +702,7 @@ def run_sensor_inversion(
 
     results = results.assign_coords(scene_ds["reflectance"].coords)
     results["reflectance"] = scene_reflectance.astype(np.float32)
+    results = add_solar_geometry_layers(results, scene_ds)
     results["valid_inversion_mask"] = scene_valid_mask.astype(bool)
     results["valid_inversion_mask"].attrs = {
         "long_name": f"Valid {sensor_display_name} SPIReS inversion mask",
@@ -564,6 +731,22 @@ def run_sensor_inversion(
     if profile is not None:
         results.attrs["execution_profile"] = profile.name
     results = copy_spatial_metadata_fn(scene_ds, results)
+    resolved_terrain_ancillary_root = terrain_ancillary_root
+    if resolved_terrain_ancillary_root is None:
+        resolved_terrain_ancillary_root = infer_default_terrain_ancillary_root(sensor_name, scene_ds)
+    results = add_albedo_product_layers(
+        results,
+        scene_ds,
+        sensor_display_name=sensor_display_name,
+        include_albedo=include_albedo,
+        include_radiative_forcing=include_radiative_forcing,
+        include_delta_vis=include_delta_vis,
+        albedo_lut_path=albedo_lut_path,
+        radiative_forcing_lut_path=radiative_forcing_lut_path,
+        terrain_ancillary_root=resolved_terrain_ancillary_root,
+        slope_path=slope_path,
+        aspect_path=aspect_path,
+    )
     for attr_name in (
         "units_by_band",
         "long_name",

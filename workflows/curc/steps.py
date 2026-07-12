@@ -74,3 +74,9 @@ class SlurmArrayPlan:
     slurm_profile: SlurmProfile
     notes: tuple[str, ...] = ()
     r0_year: int | None = None
+    include_albedo: bool = True
+    include_radiative_forcing: bool = True
+    include_delta_vis: bool = True
+    albedo_lut_path: str | None = None
+    radiative_forcing_lut_path: str | None = None
+    terrain_ancillary_root: str | None = None

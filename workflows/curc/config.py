@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from spires.albedo import DEFAULT_ALBEDO_LUT_PATH, DEFAULT_RADIATIVE_FORCING_LUT_PATH
 from spires.sensors.registry import normalize_platform_name, normalize_sensor_name
+
+
+DEFAULT_VIIRS_TERRAIN_ANCILLARY_ROOT: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,12 @@ class CurcWorkflowConfig:
     include_grouped_reflectance_rmse: bool = False
     use_grouping: bool = True
     grouping_method: str = "chunk_bin_mean"
+    include_albedo: bool = True
+    include_radiative_forcing: bool = True
+    include_delta_vis: bool = True
+    albedo_lut_path: Path | None = DEFAULT_ALBEDO_LUT_PATH
+    radiative_forcing_lut_path: Path | None = DEFAULT_RADIATIVE_FORCING_LUT_PATH
+    terrain_ancillary_root: Path | None = DEFAULT_VIIRS_TERRAIN_ANCILLARY_ROOT
     slurm_profile: SlurmProfile = field(default_factory=SlurmProfile)
 
     def canonicalized(self) -> "CurcWorkflowConfig":
@@ -96,5 +106,11 @@ class CurcWorkflowConfig:
             include_grouped_reflectance_rmse=self.include_grouped_reflectance_rmse,
             use_grouping=self.use_grouping,
             grouping_method=self.grouping_method,
+            include_albedo=self.include_albedo,
+            include_radiative_forcing=self.include_radiative_forcing,
+            include_delta_vis=self.include_delta_vis,
+            albedo_lut_path=self.albedo_lut_path,
+            radiative_forcing_lut_path=self.radiative_forcing_lut_path,
+            terrain_ancillary_root=self.terrain_ancillary_root,
             slurm_profile=self.slurm_profile,
         )

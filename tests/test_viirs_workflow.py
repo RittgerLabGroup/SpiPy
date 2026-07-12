@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from spires.sensors.full_workflow import find_default_canopy_fraction
+from spires.albedo import ALBEDO_PRODUCT_NAMES, DELTA_VIS_PRODUCT_NAME, RADIATIVE_FORCING_PRODUCT_NAME
+from spires.sensors.full_workflow import find_default_canopy_fraction, infer_default_terrain_ancillary_root
 from spires.sensors.viirs.workflow import (
     get_viirs_execution_profile,
     run_viirs_inversion,
@@ -13,6 +14,11 @@ from spires.sensors.viirs.workflow import (
 
 
 TEST_LUT_FILE = "SpiPy/tests/data/lut_viirs_noaa20_i1_i2_i3_m2_m4_m8_m11_3um_dust_bandpass.mat"
+NO_ALBEDO_PRODUCTS = {
+    "include_albedo": False,
+    "include_radiative_forcing": False,
+    "include_delta_vis": False,
+}
 
 
 def build_mock_prepared_scene() -> xr.Dataset:
@@ -24,6 +30,11 @@ def build_mock_prepared_scene() -> xr.Dataset:
     )
     solar_zenith = xr.DataArray(
         np.full((2, 2), 40.0, dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [0, 1], "x": [0, 1]},
+    )
+    solar_azimuth = xr.DataArray(
+        np.full((2, 2), 155.0, dtype=np.float32),
         dims=("y", "x"),
         coords={"y": [0, 1], "x": [0, 1]},
     )
@@ -41,6 +52,7 @@ def build_mock_prepared_scene() -> xr.Dataset:
         data_vars={
             "reflectance": reflectance,
             "solar_zenith": solar_zenith,
+            "solar_azimuth": solar_azimuth,
             "sensor_zenith": sensor_zenith,
             "valid_inversion_mask": valid_inversion_mask,
         },
@@ -128,6 +140,12 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
 
     monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
     monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr(
+        "spires.sensors.full_workflow.generate_albedo_products",
+        lambda dataset, **kwargs: xr.Dataset(
+            {DELTA_VIS_PRODUCT_NAME: xr.ones_like(dataset["grain_size"], dtype=np.float32).rename(DELTA_VIS_PRODUCT_NAME)}
+        ),
+    )
 
     result = run_viirs_inversion(
         scene,
@@ -139,6 +157,7 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
         use_grouping=True,
         grouping_method="first",
         grouping_tolerance=0.02,
+        **NO_ALBEDO_PRODUCTS,
     )
 
     assert captured["target_chunks"] is not None
@@ -156,6 +175,10 @@ def test_run_viirs_inversion_calls_core_inverter_and_masks_results(monkeypatch):
     assert result.attrs["execution_profile"] == "local"
     assert list(result.attrs["selected_bands"]) == ["I1", "I2", "I3", "M2", "M4", "M8", "M11"]
     assert "valid_inversion_mask" in result
+    assert "solar_zenith" in result
+    assert "solar_azimuth" in result
+    assert result["solar_zenith"].isel(y=0, x=0).compute().item() == pytest.approx(40.0)
+    assert result["solar_azimuth"].isel(y=0, x=0).compute().item() == pytest.approx(155.0)
     assert "raw_viewable_snow_fraction" in result
     assert "raw_shade_fraction" in result
     assert "raw_canopy_fraction" in result
@@ -204,6 +227,12 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
 
     monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
     monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr(
+        "spires.sensors.full_workflow.generate_albedo_products",
+        lambda dataset, **kwargs: xr.Dataset(
+            {DELTA_VIS_PRODUCT_NAME: xr.ones_like(dataset["grain_size"], dtype=np.float32).rename(DELTA_VIS_PRODUCT_NAME)}
+        ),
+    )
 
     result = run_viirs_inversion(
         scene,
@@ -211,6 +240,7 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
         lut_file=TEST_LUT_FILE,
         execution_profile="local",
         apply_valid_inversion_mask=False,
+        **NO_ALBEDO_PRODUCTS,
     )
 
     assert captured["valid_mask"] is None
@@ -219,6 +249,162 @@ def test_run_viirs_inversion_can_keep_outputs_unmasked(monkeypatch):
     assert not bool(result["valid_inversion_mask"].isel(y=0, x=1))
     assert result.attrs["valid_inversion_mask_applied"] == 0
     assert result.attrs["valid_inversion_mask_mode"] == "output_only"
+
+
+def test_run_viirs_inversion_adds_default_albedo_products_when_inputs_available(monkeypatch, tmp_path):
+    scene = build_mock_prepared_scene()
+    r0 = build_mock_r0()
+    albedo_lut = tmp_path / "albedo.mat"
+    rf_lut = tmp_path / "rf.mat"
+    albedo_lut.write_bytes(b"placeholder")
+    rf_lut.write_bytes(b"placeholder")
+    slope = xr.zeros_like(scene["solar_zenith"]).rename("slope")
+    aspect = xr.zeros_like(scene["solar_zenith"]).rename("aspect")
+    captured = {}
+
+    def fake_speedy_invert_dask(
+        *,
+        spectra_targets,
+        spectra_backgrounds,
+        obs_solar_angles,
+        interpolator,
+        max_eval,
+        x0,
+        algorithm,
+        client,
+        scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
+    ):
+        dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
+        coords = {dim: spectra_targets.coords[dim] for dim in dims}
+        fsca = xr.DataArray(np.full((2, 2), 0.75, dtype=np.float32), dims=dims, coords=coords)
+        return xr.Dataset(
+            data_vars={
+                "fsca": fsca,
+                "fshade": xr.ones_like(fsca) * 0.05,
+                "dust_concentration": xr.ones_like(fsca) * 10.0,
+                "grain_size": xr.ones_like(fsca) * 250.0,
+            }
+        )
+
+    def fake_generate_albedo_products(
+        dataset,
+        *,
+        flags,
+        albedo_luts,
+        radiative_forcing_luts,
+        slope,
+        aspect,
+    ):
+        captured["flags"] = flags
+        captured["albedo_luts"] = albedo_luts
+        captured["radiative_forcing_luts"] = radiative_forcing_luts
+        captured["slope_dims"] = slope.dims
+        captured["aspect_dims"] = aspect.dims
+        template = dataset["grain_size"]
+        return xr.Dataset(
+            {
+                name: (xr.ones_like(template, dtype=np.float32) * float(i + 1)).rename(name)
+                for i, name in enumerate(flags.requested_variables)
+            }
+        )
+
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr("spires.sensors.full_workflow.generate_albedo_products", fake_generate_albedo_products)
+
+    result = run_viirs_inversion(
+        scene,
+        r0,
+        lut_file=TEST_LUT_FILE,
+        execution_profile="local",
+        albedo_lut_path=albedo_lut,
+        radiative_forcing_lut_path=rf_lut,
+        slope_path=slope,
+        aspect_path=aspect,
+    )
+
+    assert set(
+        (*ALBEDO_PRODUCT_NAMES, RADIATIVE_FORCING_PRODUCT_NAME, DELTA_VIS_PRODUCT_NAME)
+    ).issubset(result.data_vars)
+    assert captured["flags"].include_albedo
+    assert captured["flags"].include_radiative_forcing
+    assert captured["flags"].include_delta_vis
+    assert captured["albedo_luts"] == albedo_lut
+    assert captured["radiative_forcing_luts"] == rf_lut
+    assert captured["slope_dims"] == ("y", "x")
+    assert captured["aspect_dims"] == ("y", "x")
+    assert result.attrs["include_albedo"] == 1
+
+
+def test_run_viirs_inversion_can_disable_albedo_products(monkeypatch, tmp_path):
+    scene = build_mock_prepared_scene()
+    r0 = build_mock_r0()
+    rf_lut = tmp_path / "rf.mat"
+    rf_lut.write_bytes(b"placeholder")
+
+    def fake_speedy_invert_dask(
+        *,
+        spectra_targets,
+        spectra_backgrounds,
+        obs_solar_angles,
+        interpolator,
+        max_eval,
+        x0,
+        algorithm,
+        client,
+        scatter_lut,
+        valid_mask,
+        use_grouping,
+        grouping_method,
+        grouping_tolerance,
+        grouping_reflectance_tol,
+        grouping_background_tol,
+        grouping_solar_zenith_tol,
+        include_grouped_reflectance_rmse,
+    ):
+        dims = tuple(dim for dim in spectra_targets.dims if dim != "band")
+        coords = {dim: spectra_targets.coords[dim] for dim in dims}
+        fsca = xr.DataArray(np.full((2, 2), 0.75, dtype=np.float32), dims=dims, coords=coords)
+        return xr.Dataset(
+            data_vars={
+                "fsca": fsca,
+                "fshade": xr.ones_like(fsca) * 0.05,
+                "dust_concentration": xr.ones_like(fsca) * 10.0,
+                "grain_size": xr.ones_like(fsca) * 250.0,
+            }
+        )
+
+    monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
+    monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
+    monkeypatch.setattr(
+        "spires.sensors.full_workflow.generate_albedo_products",
+        lambda dataset, **kwargs: xr.Dataset(
+            {DELTA_VIS_PRODUCT_NAME: xr.ones_like(dataset["grain_size"], dtype=np.float32).rename(DELTA_VIS_PRODUCT_NAME)}
+        ),
+    )
+
+    result = run_viirs_inversion(
+        scene,
+        r0,
+        lut_file=TEST_LUT_FILE,
+        execution_profile="local",
+        include_albedo=False,
+        include_radiative_forcing=False,
+        include_delta_vis=True,
+        radiative_forcing_lut_path=rf_lut,
+    )
+
+    assert DELTA_VIS_PRODUCT_NAME in result
+    assert RADIATIVE_FORCING_PRODUCT_NAME not in result
+    assert not any(name in result for name in ALBEDO_PRODUCT_NAMES)
 
 
 def test_run_viirs_inversion_applies_canopy_and_ice_snow_fraction_adjustment(monkeypatch, tmp_path):
@@ -280,6 +466,7 @@ def test_run_viirs_inversion_applies_canopy_and_ice_snow_fraction_adjustment(mon
         apply_valid_inversion_mask=False,
         canopy_fraction=canopy_fraction,
         ice_fraction=0.05,
+        **NO_ALBEDO_PRODUCTS,
     )
 
     assert result["raw_viewable_snow_fraction"].isel(y=0, x=0).item() == pytest.approx(0.50)
@@ -357,7 +544,7 @@ def test_run_viirs_inversion_returns_netcdf_serializable_attrs(monkeypatch, tmp_
     monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
     monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
-    result = run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local")
+    result = run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local", **NO_ALBEDO_PRODUCTS)
 
     assert "units_by_band" not in result.attrs
     assert json.loads(result["x"].attrs["two_dimensional_attr"]) == [[1, 2], [3, 4]]
@@ -429,7 +616,7 @@ def test_run_viirs_inversion_accepts_noaa21_lut_platform(monkeypatch, tmp_path):
     monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
     monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
-    result = run_viirs_inversion(scene, r0, lut_file=lut_file)
+    result = run_viirs_inversion(scene, r0, lut_file=lut_file, **NO_ALBEDO_PRODUCTS)
 
     assert result.attrs["platform"] == "noaa21"
 
@@ -473,7 +660,7 @@ def test_run_viirs_inversion_preserves_reflectance_in_output(monkeypatch, tmp_pa
     monkeypatch.setattr("spires.sensors.full_workflow.LutInterpolator", DummyInterpolator)
     monkeypatch.setattr("spires.sensors.full_workflow.speedy_invert_dask", fake_speedy_invert_dask)
 
-    result = run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local")
+    result = run_viirs_inversion(scene, r0, lut_file=TEST_LUT_FILE, execution_profile="local", **NO_ALBEDO_PRODUCTS)
 
     assert "reflectance" in result
     assert result["reflectance"].dims == ("y", "x", "band")
@@ -495,3 +682,10 @@ def test_default_viirs_canopy_lookup_is_platform_agnostic(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
 
     assert find_default_canopy_fraction(scene, sensor_name="viirs") == canopy_path
+
+
+def test_default_viirs_terrain_lookup_uses_scene_platform(monkeypatch, tmp_path):
+    scene = xr.Dataset(attrs={"platform": "noaa21", "tile": "h08v05"})
+    monkeypatch.setattr("spires.sensors.full_workflow.DEFAULT_VIIRS_TERRAIN_ANCILLARY_BASE", tmp_path / "viirs")
+
+    assert infer_default_terrain_ancillary_root("viirs", scene) == tmp_path / "viirs" / "noaa21" / "ancillary"

@@ -8,6 +8,7 @@ from pathlib import Path
 import traceback
 from typing import Any
 
+from spires.albedo import DEFAULT_ALBEDO_LUT_PATH, DEFAULT_RADIATIVE_FORCING_LUT_PATH
 from spires.logging_utils import configure_spires_file_logger, log_event, remove_empty_log_file
 from spires.sensors.io import load_output_dataset_if_valid, write_output_dataset
 from spires.sensors.viirs.workflow import run_viirs_inversion
@@ -36,6 +37,14 @@ class InversionRuntimeContext:
     water_mask_path: str | None
     playa_mask_path: str | None
     lut_file: str
+    include_albedo: bool
+    include_radiative_forcing: bool
+    include_delta_vis: bool
+    albedo_lut_path: str | None
+    radiative_forcing_lut_path: str | None
+    terrain_ancillary_root: str | None
+    slope_path: str | None
+    aspect_path: str | None
     output_path: str
     output_dataset_path: str
     log_path: str
@@ -215,12 +224,28 @@ def build_viirs_snpp_inversion_runtime_context(
     """Resolve one VIIRS SNPP array task into concrete runtime paths."""
     resolved_task_index = resolve_array_task_index(task_index)
     task = resolve_inversion_task_from_manifest(manifest_path, resolved_task_index)
+    manifest_payload = load_inversion_array_manifest(manifest_path)
     scratch_root = infer_scratch_root_from_output_path(task.output_path)
     reflectance_root = scratch_root / "input" / task.sensor / task.platform / "reflectance" / task.tile / str(task.water_year)
     staged_reflectance_paths = tuple(str(reflectance_root / Path(path).name) for path in task.source_paths)
     ancillary_root = scratch_root / "input" / task.sensor / task.platform / "ancillary" / task.tile
     r0_root = scratch_root / "input" / task.sensor / task.platform / "ancillary" / "r0" / task.tile / str(task.r0_year)
     resolved_lut_file = default_viirs_lut_file(task.platform) if lut_file is None else Path(lut_file).expanduser().resolve()
+    include_albedo = bool(manifest_payload.get("include_albedo", True))
+    include_radiative_forcing = bool(manifest_payload.get("include_radiative_forcing", True))
+    include_delta_vis = bool(manifest_payload.get("include_delta_vis", True))
+    albedo_lut_path = manifest_payload.get("albedo_lut_path")
+    radiative_forcing_lut_path = manifest_payload.get("radiative_forcing_lut_path")
+    terrain_ancillary_root = manifest_payload.get("terrain_ancillary_root")
+    if albedo_lut_path is None and include_albedo:
+        albedo_lut_path = str(DEFAULT_ALBEDO_LUT_PATH)
+    if radiative_forcing_lut_path is None and (include_radiative_forcing or include_delta_vis):
+        radiative_forcing_lut_path = str(DEFAULT_RADIATIVE_FORCING_LUT_PATH)
+    if terrain_ancillary_root is None:
+        terrain_ancillary_root = str(scratch_root / "input" / task.sensor / task.platform / "ancillary")
+    terrain_root = Path(str(terrain_ancillary_root)).expanduser()
+    slope_path = terrain_root / task.tile / f"{task.tile}_slope_gmted_med075.tif"
+    aspect_path = terrain_root / task.tile / f"{task.tile}_aspect_gmted_med075_ccw_from_south.tif"
     r0_path = _runtime_r0_dataset_path(scratch_root, task)
     canopy_fraction_path = _infer_static_fraction_path(ancillary_root, "canopy_fraction")
     ice_fraction_path = (
@@ -249,6 +274,14 @@ def build_viirs_snpp_inversion_runtime_context(
         water_mask_path=str(water_mask_path) if water_mask_path is not None else None,
         playa_mask_path=str(playa_mask_path) if playa_mask_path is not None else None,
         lut_file=str(resolved_lut_file),
+        include_albedo=include_albedo,
+        include_radiative_forcing=include_radiative_forcing,
+        include_delta_vis=include_delta_vis,
+        albedo_lut_path=str(albedo_lut_path) if albedo_lut_path is not None else None,
+        radiative_forcing_lut_path=str(radiative_forcing_lut_path) if radiative_forcing_lut_path is not None else None,
+        terrain_ancillary_root=str(terrain_ancillary_root) if terrain_ancillary_root is not None else None,
+        slope_path=str(slope_path),
+        aspect_path=str(aspect_path),
         output_path=task.output_path,
         output_dataset_path=str(_inversion_output_dataset_path(task)),
         log_path=task.log_path,
@@ -265,6 +298,10 @@ def summarize_viirs_snpp_runtime_requirements(context: InversionRuntimeContext) 
         "water_mask_path": [],
         "ice_fraction_path": [],
         "playa_mask_path": [],
+        "albedo_lut_path": [],
+        "radiative_forcing_lut_path": [],
+        "slope_path": [],
+        "aspect_path": [],
     }
     if len(context.staged_reflectance_paths) != 1:
         raise ValueError(
@@ -278,6 +315,24 @@ def summarize_viirs_snpp_runtime_requirements(context: InversionRuntimeContext) 
         missing["r0_path"].append(context.r0_path)
     if not Path(context.lut_file).exists():
         missing["lut_file"].append(context.lut_file)
+    if context.include_albedo:
+        if context.albedo_lut_path is None or not Path(context.albedo_lut_path).exists():
+            missing["albedo_lut_path"].append(str(DEFAULT_ALBEDO_LUT_PATH))
+        if context.slope_path is None or not Path(context.slope_path).exists():
+            missing["slope_path"].append(
+                str(Path(context.terrain_ancillary_root or context.ancillary_root) / context.task.tile / f"{context.task.tile}_slope_gmted_med075.tif")
+            )
+        if context.aspect_path is None or not Path(context.aspect_path).exists():
+            missing["aspect_path"].append(
+                str(
+                    Path(context.terrain_ancillary_root or context.ancillary_root)
+                    / context.task.tile
+                    / f"{context.task.tile}_aspect_gmted_med075_ccw_from_south.tif"
+                )
+            )
+    if context.include_radiative_forcing or context.include_delta_vis:
+        if context.radiative_forcing_lut_path is None or not Path(context.radiative_forcing_lut_path).exists():
+            missing["radiative_forcing_lut_path"].append(str(DEFAULT_RADIATIVE_FORCING_LUT_PATH))
     if context.cloud_mask_path is None or not Path(context.cloud_mask_path).exists():
         missing["cloud_mask_path"].append(
             str(
@@ -333,7 +388,16 @@ def _failure_fields_from_missing_inputs(missing: dict[str, list[str]]) -> dict[s
             "failure_code": "missing_lut",
             "retry_recommended": False,
         }
-    for key in ("cloud_mask_path", "water_mask_path", "ice_fraction_path", "playa_mask_path"):
+    for key in (
+        "albedo_lut_path",
+        "radiative_forcing_lut_path",
+        "slope_path",
+        "aspect_path",
+        "cloud_mask_path",
+        "water_mask_path",
+        "ice_fraction_path",
+        "playa_mask_path",
+    ):
         if missing.get(key):
             return {
                 "failure_code": f"missing_{key}",
@@ -380,6 +444,12 @@ def execute_viirs_snpp_inversion_task(
     include_grouped_reflectance_rmse: bool | None = None,
     use_grouping: bool | None = None,
     grouping_method: str | None = None,
+    include_albedo: bool | None = None,
+    include_radiative_forcing: bool | None = None,
+    include_delta_vis: bool | None = None,
+    albedo_lut_path: str | Path | None = None,
+    radiative_forcing_lut_path: str | Path | None = None,
+    terrain_ancillary_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Execute or dry-run one manifest-backed VIIRS SNPP inversion task."""
     context = build_viirs_snpp_inversion_runtime_context(
@@ -505,6 +575,25 @@ def execute_viirs_snpp_inversion_task(
     manifest_include_grouped_reflectance_rmse = bool(manifest_payload.get("include_grouped_reflectance_rmse", False))
     manifest_use_grouping = bool(manifest_payload.get("use_grouping", True))
     manifest_grouping_method = str(manifest_payload.get("grouping_method", "chunk_bin_mean"))
+    manifest_include_albedo = bool(manifest_payload.get("include_albedo", True))
+    manifest_include_radiative_forcing = bool(manifest_payload.get("include_radiative_forcing", True))
+    manifest_include_delta_vis = bool(manifest_payload.get("include_delta_vis", True))
+    resolved_include_albedo = manifest_include_albedo if include_albedo is None else include_albedo
+    resolved_include_radiative_forcing = (
+        manifest_include_radiative_forcing if include_radiative_forcing is None else include_radiative_forcing
+    )
+    resolved_include_delta_vis = manifest_include_delta_vis if include_delta_vis is None else include_delta_vis
+    resolved_albedo_lut_path = context.albedo_lut_path if albedo_lut_path is None else str(Path(albedo_lut_path).expanduser())
+    resolved_radiative_forcing_lut_path = (
+        context.radiative_forcing_lut_path
+        if radiative_forcing_lut_path is None
+        else str(Path(radiative_forcing_lut_path).expanduser())
+    )
+    resolved_terrain_ancillary_root = (
+        context.terrain_ancillary_root
+        if terrain_ancillary_root is None
+        else str(Path(terrain_ancillary_root).expanduser())
+    )
 
     try:
         run_kwargs: dict[str, Any] = {
@@ -529,7 +618,16 @@ def execute_viirs_snpp_inversion_task(
             ),
             "use_grouping": manifest_use_grouping if use_grouping is None else use_grouping,
             "grouping_method": manifest_grouping_method if grouping_method is None else grouping_method,
+            "include_albedo": resolved_include_albedo,
+            "include_radiative_forcing": resolved_include_radiative_forcing,
+            "include_delta_vis": resolved_include_delta_vis,
+            "albedo_lut_path": resolved_albedo_lut_path,
+            "radiative_forcing_lut_path": resolved_radiative_forcing_lut_path,
+            "terrain_ancillary_root": resolved_terrain_ancillary_root,
         }
+        if resolved_include_albedo:
+            run_kwargs["slope_path"] = context.slope_path
+            run_kwargs["aspect_path"] = context.aspect_path
         if context.canopy_fraction_path is not None:
             run_kwargs["canopy_fraction"] = context.canopy_fraction_path
         if context.ice_fraction_path is not None:
